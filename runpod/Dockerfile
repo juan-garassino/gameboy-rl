@@ -20,11 +20,10 @@ RUN curl -LsSf https://astral.sh/uv/install.sh | sh
 
 WORKDIR /app
 COPY --chown=researcher:researcher pyproject.toml uv.lock ./
-# pyproject pins CPU torch 2.5 for laptops/CI; the pod gets the CUDA 12.4 wheel of the same line
-# (torch 2.5 has no cu126 build; cu124 runs on any recent 12.x driver).
+# pyproject pins CPU torch==2.14.1 for laptops/CI; the pod gets the cu126 wheel of the SAME version (keep in sync).
 RUN uv python install 3.12 \
     && uv sync --frozen --no-install-project --no-install-package torch \
-    && uv pip install --index-url https://download.pytorch.org/whl/cu124 "torch>=2.5,<2.6"
+    && uv pip install --index-url https://download.pytorch.org/whl/cu126 "torch==2.14.1"
 
 COPY --chown=researcher:researcher src ./src
 COPY --chown=researcher:researcher runpod ./runpod
@@ -33,7 +32,8 @@ COPY --chown=researcher:researcher runpod ./runpod
 COPY --chown=researcher:researcher v2 ./v2
 COPY --chown=researcher:researcher *.state ./
 RUN uv sync --frozen --inexact --no-install-package torch \
-    && chmod +x runpod/entrypoint.sh runpod/scripts/*.sh
+    && chmod +x runpod/entrypoint.sh runpod/scripts/*.sh \
+    && python -c "import torch, gameboy_rl.train; assert torch.version.cuda, 'CPU torch in the GPU image'"
 
 ENV WORKSPACE_DIR=/workspace APP_DIR=/app MODE=train
 ENTRYPOINT ["/usr/bin/tini", "--", "/app/runpod/entrypoint.sh"]
