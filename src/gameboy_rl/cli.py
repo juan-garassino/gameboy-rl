@@ -28,6 +28,11 @@ def build_parser() -> argparse.ArgumentParser:
     with_overrides(sub.add_parser("smoke", help="2-env run, ~2k steps, one full episode, in a temp dir"))
     cs = with_overrides(sub.add_parser("check-start", help="boot the start state, random actions, look for dialog"))
     cs.add_argument("--actions", type=int, default=200)
+    pl = with_overrides(sub.add_parser("play", help="replay a checkpoint locally into an mp4"))
+    pl.add_argument("--model", type=Path, required=True)
+    pl.add_argument("--play-steps", type=int, default=1500, help="agent steps (1 step = 0.4 s of game)")
+    pl.add_argument("--video", type=Path, required=True)
+    pl.add_argument("--deterministic", action="store_true")
     st = sub.add_parser("status", help="live run state from MLflow (health, badges, fps)")
     st.add_argument("run_name", help="run id = MLflow run name, e.g. 20261124-180000")
     return p
@@ -76,6 +81,18 @@ def _cmd_check_start(args: argparse.Namespace) -> int:
     return 0 if result["verdict"] == "overworld" else 1
 
 
+def _cmd_play(args: argparse.Namespace) -> int:
+    from stable_baselines3 import PPO
+
+    from gameboy_rl.play import play
+    from gameboy_rl.train import SCHEDULE_OVERRIDES
+
+    model = PPO.load(args.model, custom_objects=SCHEDULE_OVERRIDES, device="cpu")
+    stats = play(settings_from_args(args), model, args.play_steps, args.video, deterministic=args.deterministic)
+    print(json.dumps(stats))
+    return 0
+
+
 def _cmd_status(args: argparse.Namespace) -> int:
     from gameboy_rl.status import fetch
 
@@ -87,5 +104,5 @@ def main(argv: list[str] | None = None) -> int:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
     args = build_parser().parse_args(argv)
     handlers = {"train": _cmd_train, "smoke": _cmd_smoke, "check-start": _cmd_check_start,
-                "status": _cmd_status}
+                "status": _cmd_status, "play": _cmd_play}
     return handlers[args.cmd](args)

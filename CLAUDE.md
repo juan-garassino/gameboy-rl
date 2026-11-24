@@ -17,6 +17,7 @@ Template for all monitoring + RunPod plumbing: `../RL-sega-rl` (keep the two cop
 | `train.py` | `run()`: baseline_fast_v2 PPO params, resume (run ckpt > `GBRL_RESUME_FROM`), checkpoints → MLflow, health, budget, PWhiddy's `TensorboardCallback`, any crash → CRITICAL, DONE in `finally` |
 | `check_start.py` | `text_box_visible(frame)` heuristic, `run()` → `runs/check_start{,_first}.png` |
 | `status.py` | `gameboy-rl status <run>`: live state from MLflow |
+| `play.py` | `gameboy-rl play --model X --video out.mp4`: local headless replay of a checkpoint (the trainer records no eval videos) |
 | `cli.py` | `gameboy-rl train|smoke|check-start|status` (argparse) |
 
 `runpod/`: `Dockerfile` (CUDA 12.8 devel, uv, cu126 torch 2.14.1 swapped in, no ROM/ckpt), `entrypoint.sh` (see
