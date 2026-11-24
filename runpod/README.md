@@ -6,10 +6,7 @@ never `docker build` on the laptop. The image contains no ROM and no checkpoint.
 ## Before a launch (per run)
 
 ```bash
-# private bucket only — never upload a ROM to a public bucket
-gcloud storage cp roms/pokemon_red_version.gb gs://garassino-ml-artifacts/gameboy-rl/roms/
-# once (kept): the pretrained PWhiddy policy the run resumes from
-gcloud storage cp v2/runs/poke_26214400.zip gs://garassino-ml-artifacts/gameboy-rl/init/
+make upload-inputs   # refuses a public bucket; ROM -> gameboy-rl/roms/, poke_26214400.zip -> gameboy-rl/init/ (once)
 ```
 
 Pod env: `RUN_ID`, `GCS_BUCKET=garassino-ml-artifacts`, `GCS_ACCESS_TOKEN` (1 h, WIF-minted), `RUNPOD_API_KEY` (or
@@ -29,7 +26,13 @@ Container disk only (no network volume). Emulation is CPU-bound: vCPU count matt
 5. Reads its own USD/h (`pod_self.sh cost`) → `GBRL_COST_PER_HR_USD`; training stops at
    min(`GBRL_MAX_HOURS`, `GBRL_MAX_EUR` worth of hours).
 6. Syncs the run dir to GCS every `SYNC_INTERVAL` (600 s) while the token lasts; failures never stop training.
-7. Runs `gameboy-rl $MODE`; on any exit: final sync, then `pod_self.sh remove` (billing stops).
+7. Runs `gameboy-rl $MODE`; on any exit: final sync, then `pod_self.sh remove` (5 tries with backoff; a GraphQL
+   `errors` reply counts as a failure — if all fail the log says STOP IT BY HAND). The EXIT trap is installed before
+   the env checks, so even a pod with a missing `RUN_ID` removes itself. Every `gsutil` call is capped by
+   `GCS_TIMEOUT` (300 s); MLflow HTTP calls by `MLFLOW_HTTP_REQUEST_MAX_RETRIES=2` / `MLFLOW_HTTP_REQUEST_TIMEOUT=20`.
+8. Trainer side: if `MLFLOW_TRACKING_URI` is set and MLflow can't open the run or upload `config.json` (probe), it
+   exits 4 before creating any env (health CRITICAL `mlflow`, no DONE). Any crash → CRITICAL `crash`/`env_crash`;
+   the final checkpoint, `DONE`, health and progress are uploaded on every exit.
 
 ## Watch a run
 
