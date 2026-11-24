@@ -17,7 +17,7 @@ on:
         required: true
         type: choice
         default: train
-        options: [train, smoke, check-start]
+        options: [train, train-silver, smoke, check-start]
       run_id:
         description: 'Run ID (default: pokemon-<timestamp>)'
         required: false
@@ -101,8 +101,9 @@ jobs:
             --arg token "$GCS_ACCESS_TOKEN" --arg api_key "$RUNPOD_API_KEY" \
             --arg ml_user "$MLFLOW_USER" --arg ml_pass "$MLFLOW_PASS" \
             '[
-              {key:"MODE", value:$mode}, {key:"RUN_ID", value:$run_id},
-              {key:"INIT_CKPT", value:$init_ckpt}, {key:"GBRL_N_ENVS", value:$n_envs}, {key:"GBRL_MAX_HOURS", value:$max_hours},
+              {key:"MODE", value:(if $mode == "train-silver" then "train" else $mode end)},
+              {key:"GBRL_GAME", value:(if $mode == "train-silver" then "silver" else "red" end)}, {key:"RUN_ID", value:$run_id},
+              {key:"INIT_CKPT", value:(if $mode == "train-silver" then "" else $init_ckpt end)}, {key:"GBRL_N_ENVS", value:$n_envs}, {key:"GBRL_MAX_HOURS", value:$max_hours},
               {key:"GCS_BUCKET", value:"garassino-ml-artifacts"}, {key:"GCS_ACCESS_TOKEN", value:$token},
               {key:"GBRL_RUNPOD_API_KEY", value:$api_key},
               {key:"MLFLOW_TRACKING_URI", value:"https://garassino-mlflow-920423386248.europe-west1.run.app"},

@@ -210,3 +210,18 @@ def test_uses_gcloud_storage_not_gsutil(tmp_path):
     _, calls, _ = _run(tmp_path)
     assert "gsutil" not in calls
     assert "gcloud storage" in calls
+
+
+def test_silver_pulls_its_rom_and_start_state_then_deletes_both(tmp_path):
+    rc, calls, _ = _run(tmp_path, GBRL_GAME="silver", INIT_CKPT="")
+    lines = calls.splitlines()
+    rom = next(i for i, ln in enumerate(lines) if "roms/pokemon_silver_version.gbc" in ln)
+    state = next(i for i, ln in enumerate(lines) if "roms/claude_totodile.state" in ln)
+    gone = next(i for i, ln in enumerate(lines) if " rm " in ln and "roms/" in ln)
+    assert rc == 0 and rom < state < gone
+    assert _trainer_line(calls) is not None and "init/" not in calls
+
+
+def test_red_never_asks_for_a_start_state(tmp_path):
+    _, calls, _ = _run(tmp_path)
+    assert "claude_totodile" not in calls and "pokemon_red_version.gb" in calls

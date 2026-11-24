@@ -1,0 +1,201 @@
+"""Pokémon Silver (Game Boy Color, in color): env, reward and game-outcome stats.
+
+RAM addresses come from pret/pokegold's pokesilver.sym; the ROM is byte-identical to that build (SHA-1 49b163f7…).
+The reward pays only for game progress a player would recognise, so doing nothing must earn exactly nothing.
+"""
+from __future__ import annotations
+
+from pathlib import Path
+from typing import Callable
+
+import gymnasium as gym
+import numpy as np
+from gymnasium import spaces
+
+from gameboy_rl.config import Settings
+
+PLAYER_NAME, MAP_GROUP, MAP_NUMBER, Y, X = 0xD1A3, 0xDA00, 0xDA01, 0xDA02, 0xDA03
+JOHTO_BADGES, KANTO_BADGES, BATTLE_MODE = 0xD57C, 0xD57D, 0xD116
+EVENTS_START, EVENTS_END = 0xD7B7, 0xD8B7
+CAUGHT_START, CAUGHT_END = 0xDBE4, 0xDC04
+PARTY_COUNT, PARTY, MON_SIZE, LEVEL, HP, MAX_HP = 0xDA22, 0xDA2A, 0x30, 0x1F, 0x22, 0x24
+
+BUTTONS = ["down", "left", "right", "up", "a", "b"]  # no START: menus and saving are not progress
+ACTION_FRAMES, PRESS_FRAMES = 24, 8
+FRAME_STACK = 3
+WEIGHTS = {"badge": 20.0, "event": 2.0, "map": 1.0, "caught": 1.0, "level": 0.5, "tile": 0.01}
+
+Read = Callable[[int], int]
+
+
+def _bits(read: Read, start: int, end: int) -> int:
+    return sum(bin(read(a)).count("1") for a in range(start, end))
+
+
+class SilverStats:
+    """Game progress, read from RAM. Every count is a high-water mark, so nothing can be farmed by toggling."""
+
+    def __init__(self, read: Read):
+        self.read = read
+        self.tiles: set[tuple[int, int, int, int]] = set()
+        self.maps: set[tuple[int, int]] = set()
+        self.base = self._raw()
+        self.best = dict(self.base)
+        self.observe()
+        self.start_tiles, self.start_maps = len(self.tiles), len(self.maps)
+
+    def _raw(self) -> dict[str, int]:
+        r = self.read
+        party = min(r(PARTY_COUNT), 6)
+        return {"badge": _bits(r, JOHTO_BADGES, KANTO_BADGES + 1), "event": _bits(r, EVENTS_START, EVENTS_END),
+                "caught": _bits(r, CAUGHT_START, CAUGHT_END),
+                "level": sum(r(PARTY + i * MON_SIZE + LEVEL) for i in range(party))}
+
+    def observe(self) -> None:
+        for k, v in self._raw().items():
+            self.best[k] = max(self.best[k], v)
+        if self.read(BATTLE_MODE) == 0:
+            m = (self.read(MAP_GROUP), self.read(MAP_NUMBER))
+            self.maps.add(m)
+            self.tiles.add((*m, self.read(X), self.read(Y)))
+
+    def progress(self) -> dict[str, int]:
+        gained = {k: self.best[k] - self.base[k] for k in self.base}
+        return {**gained, "map": len(self.maps) - self.start_maps, "tile": len(self.tiles) - self.start_tiles}
+
+    def value(self) -> float:
+        return sum(WEIGHTS[k] * v for k, v in self.progress().items())
+
+    def hp_fraction(self) -> float:
+        hp = full = 0
+        for i in range(min(self.read(PARTY_COUNT), 6)):
+            a = PARTY + i * MON_SIZE
+            hp += self.read(a + HP) * 256 + self.read(a + HP + 1)
+            full += self.read(a + MAX_HP) * 256 + self.read(a + MAX_HP + 1)
+        return hp / full if full else 0.0
+
+
+class SilverEnv(gym.Env):
+    metadata = {"render_modes": ["rgb_array"]}
+
+    def __init__(self, cfg: Settings):
+        from pyboy import PyBoy
+
+        for label, path in (("ROM", cfg.rom_file), ("start state", cfg.init_state_path)):
+            if not path.exists():
+                raise FileNotFoundError(f"{label} not found: {path}")
+        self.cfg = cfg
+        self.pyboy = PyBoy(str(cfg.rom_file), window="null", cgb=True, sound_emulated=False)
+        self.pyboy.set_emulation_speed(0)
+        self.action_space = spaces.Discrete(len(BUTTONS))
+        self.observation_space = spaces.Dict({
+            "screens": spaces.Box(0, 255, (72, 80, 3 * FRAME_STACK), np.uint8),
+            "visited": spaces.Box(0, 255, (48, 48, 1), np.uint8),
+            "state": spaces.Box(-1.0, 1.0, (9,), np.float32),
+            "recent_actions": spaces.MultiDiscrete([len(BUTTONS)] * FRAME_STACK),
+        })
+        self.stats: SilverStats | None = None
+
+    def _read(self, addr: int) -> int:
+        return self.pyboy.memory[1, addr]  # WRAM bank 1, whatever bank the game has paged in
+
+    def render(self) -> np.ndarray:
+        return np.array(self.pyboy.screen.ndarray[:, :, :3])
+
+    def reset(self, *, seed=None, options=None):
+        super().reset(seed=seed)
+        with open(self.cfg.init_state_path, "rb") as f:
+            self.pyboy.load_state(f)
+        self.pyboy.tick(1 + int(self.np_random.integers(0, 60)), True)  # vary the RNG so envs are not clones
+        self.stats = SilverStats(self._read)
+        self.value, self.steps = 0.0, 0
+        self.screens = np.zeros((72, 80, 3 * FRAME_STACK), np.uint8)
+        self.recent = np.zeros(FRAME_STACK, np.int64)
+        return self._obs(), {}
+
+    def step(self, action):
+        button = BUTTONS[int(action)]
+        self.pyboy.button_press(button)
+        self.pyboy.tick(PRESS_FRAMES, False)
+        self.pyboy.button_release(button)
+        return self._advance(int(action), ACTION_FRAMES - PRESS_FRAMES)
+
+    def step_nothing(self):
+        """Same clock as step(), no button: the do-nothing baseline."""
+        return self._advance(0, ACTION_FRAMES)
+
+    def _advance(self, action: int, frames: int):
+        self.pyboy.tick(frames - 1, False)
+        self.pyboy.tick(1, True)
+        self.stats.observe()
+        self.recent = np.roll(self.recent, 1)
+        self.recent[0] = action
+        self.steps += 1
+        new = self.stats.value()
+        reward, self.value = new - self.value, new
+        return self._obs(), float(reward), False, self.steps >= self.cfg.ep_length, {"progress": self.stats.progress()}
+
+    def _obs(self) -> dict:
+        self.screens = np.roll(self.screens, 3, axis=2)
+        self.screens[:, :, :3] = self.render()[::2, ::2]
+        r, s = self._read, self.stats
+        group, number, x, y = r(MAP_GROUP), r(MAP_NUMBER), r(X), r(Y)
+        visited = np.zeros((48, 48, 1), np.uint8)
+        for g, n, tx, ty in s.tiles:
+            if (g, n) == (group, number) and abs(tx - x) < 12 and abs(ty - y) < 12:
+                c, w = (tx - x + 12) * 2, (ty - y + 12) * 2
+                visited[w:w + 2, c:c + 2] = 255
+        vec = [s.hp_fraction(), min(1.0, s.best["level"] / 100), min(1.0, s.best["badge"] / 16),
+               float(r(BATTLE_MODE) > 0), group / 32, number / 32, min(1.0, x / 64), min(1.0, y / 64),
+               min(6, r(PARTY_COUNT)) / 6]
+        return {"screens": self.screens.copy(), "visited": visited,
+                "state": np.clip(np.array(vec, np.float32), -1, 1), "recent_actions": self.recent.copy()}
+
+    # ProgressCallback's interface (same names as PWhiddy's Red env)
+    def get_badges(self) -> int:
+        return self.stats.best["badge"]
+
+    def get_all_events_reward(self) -> int:
+        return self.stats.progress()["event"]
+
+    @property
+    def explore_map(self) -> np.ndarray:
+        return np.ones(len(self.stats.tiles), np.uint8)
+
+    @property
+    def max_map_progress(self) -> int:
+        return len(self.stats.maps)
+
+    def close(self):
+        self.pyboy.stop(save=False)
+
+
+class DoNothingEarnsReward(RuntimeError):
+    """The reward is broken: refuse to spend money training on it."""
+
+
+def play_episode(env, steps: int, choose: Callable[[dict], int | None], heartbeat: Callable[[], None] | None = None,
+                 frames: list | None = None) -> dict[str, float]:
+    """Play `steps` agent steps; choose() returns an action, or None to press nothing."""
+    obs, _ = env.reset()
+    total, info = 0.0, {"progress": env.stats.progress()}
+    for _ in range(steps):
+        if heartbeat is not None:
+            heartbeat()
+        action = choose(obs)
+        obs, reward, _, truncated, info = env.step_nothing() if action is None else env.step(action)
+        total += reward
+        if frames is not None:
+            frames.append(env.render())
+        if truncated:
+            break
+    return {"return": total, **{k: float(v) for k, v in info["progress"].items()}}
+
+
+def run_baselines(env, steps: int, heartbeat: Callable[[], None] | None = None) -> dict[str, float]:
+    nothing = play_episode(env, steps, lambda obs: None, heartbeat)
+    if nothing["return"] > 0:
+        raise DoNothingEarnsReward(f"doing nothing earned {nothing['return']}: {nothing}")
+    random = play_episode(env, steps, lambda obs: int(env.action_space.sample()), heartbeat)
+    return {**{f"baseline/nothing_{k}": v for k, v in nothing.items()},
+            **{f"baseline/random_{k}": v for k, v in random.items()}}
