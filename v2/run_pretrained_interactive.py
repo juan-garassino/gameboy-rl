@@ -52,7 +52,7 @@ if __name__ == '__main__':
                 'headless': False, 'save_final_state': True, 'early_stop': False,
                 'action_freq': 24, 'init_state': '../init.state', 'max_steps': ep_length, 
                 'print_rewards': True, 'save_video': False, 'fast_video': True, 'session_path': sess_path,
-                'gb_path': '../PokemonRed.gb', 'debug': False, 'sim_frame_dist': 2_000_000.0, 'extra_buttons': False
+                'gb_path': '../roms/pokemon_red_version.gb', 'debug': False, 'sim_frame_dist': 2_000_000.0, 'extra_buttons': False
             }
     
     num_cpu = 1 #64 #46  # Also sets the number of episodes per training iteration
