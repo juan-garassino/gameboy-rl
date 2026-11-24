@@ -13,7 +13,7 @@
 # consumes the per-run ROM upload.
 #
 # Required env: RUN_ID, GCS_BUCKET; GCS_ACCESS_TOKEN (short-lived, 1 h — after that only MLflow works).
-# Every gsutil call is capped by GCS_TIMEOUT (300 s).
+# Every gcloud storage call is capped by GCS_TIMEOUT (300 s).
 # Optional: INIT_CKPT (default poke_26214400.zip; "" = fresh policy), ROM_SHA1 ("" = skip check).
 # RunPod injects RUNPOD_POD_ID.
 set -uo pipefail
@@ -28,17 +28,17 @@ RUN_DIR="" GCS_ROOT="" SYNC_PID="" SKIP_SYNC=0
 log() { echo "=== $* ==="; }
 
 gcs() {
-    # Re-read the token before every call (token_writer.sh may swap it); never let a hung gsutil block the pod.
+    # Re-read the token before every call (token_writer.sh may swap it); never let a hung gcloud call block the pod.
     if [ -s "$TOKEN_FILE" ]; then
-        CLOUDSDK_AUTH_ACCESS_TOKEN="$(cat "$TOKEN_FILE")" timeout "$GCS_TIMEOUT" gsutil "$@"
+        CLOUDSDK_AUTH_ACCESS_TOKEN="$(cat "$TOKEN_FILE")" timeout "$GCS_TIMEOUT" gcloud storage "$@"
     else
-        timeout "$GCS_TIMEOUT" gsutil "$@"
+        timeout "$GCS_TIMEOUT" gcloud storage "$@"
     fi
 }
 
 sync_up() {
     [ -n "$RUN_DIR" ] && [ -n "$GCS_ROOT" ] || return 0
-    gcs -m -q rsync -r "$RUN_DIR" "${GCS_ROOT}/runs/${RUN_ID}" || log "sync to GCS failed (retrying next interval)"
+    gcs rsync --recursive "$RUN_DIR" "${GCS_ROOT}/runs/${RUN_ID}" || log "sync to GCS failed (retrying next interval)"
 }
 
 finish() {
@@ -83,20 +83,20 @@ write_health() {  # status reason
     printf '{"status": "%s", "reasons": ["%s"], "last": {}}\n' "$1" "$2" > "${RUN_DIR}/health.json"
 }
 
-if gcs -q stat "${GCS_ROOT}/runs/${RUN_ID}/DONE" 2>/dev/null; then
+if gcs stat "${GCS_ROOT}/runs/${RUN_ID}/DONE" 2>/dev/null; then
     log "run ${RUN_ID} already DONE, nothing to do"
     SKIP_SYNC=1
     exit 0
 fi
 
 log "pulling run dir (resume)"
-gcs -m -q rsync -r "${GCS_ROOT}/runs/${RUN_ID}" "$RUN_DIR" 2>/dev/null || log "no prior state, fresh run"
+gcs rsync --recursive "${GCS_ROOT}/runs/${RUN_ID}" "$RUN_DIR" 2>/dev/null || log "no prior state, fresh run"
 
 if compgen -G "${RUN_DIR}/checkpoints/ckpt_*.zip" > /dev/null; then
     log "run has its own checkpoint, resuming from it"
 elif [ -n "$INIT_CKPT" ]; then
     log "pulling init checkpoint ${INIT_CKPT}"
-    if ! gcs -q cp "${GCS_ROOT}/init/${INIT_CKPT}" "${WORKSPACE_DIR}/init/${INIT_CKPT}"; then
+    if ! gcs cp "${GCS_ROOT}/init/${INIT_CKPT}" "${WORKSPACE_DIR}/init/${INIT_CKPT}"; then
         log "init checkpoint missing (set INIT_CKPT= to start from a fresh policy)"
         write_health CRITICAL init_ckpt
         exit 1
@@ -108,13 +108,13 @@ if [ -s "$ROM_LOCAL" ]; then
     log "ROM already on disk"
 else
     log "pulling ROM"
-    if ! gcs -q cp "${GCS_ROOT}/roms/${ROM_NAME}" "$ROM_LOCAL"; then
+    if ! gcs cp "${GCS_ROOT}/roms/${ROM_NAME}" "$ROM_LOCAL"; then
         log "no ROM in GCS and none on disk"
         write_health CRITICAL rom
         exit 1
     fi
     # ROMs are uploaded right before each launch and must not stay in GCS (Juan's rule).
-    gcs -m -q rm "${GCS_ROOT}/roms/**" || log "could not delete ROMs from GCS — remove them by hand"
+    gcs rm "${GCS_ROOT}/roms/**" || log "could not delete ROMs from GCS — remove them by hand"
 fi
 if [ -n "$ROM_SHA1" ] && [ "$(sha1sum "$ROM_LOCAL" | cut -d' ' -f1)" != "$ROM_SHA1" ]; then
     log "ROM SHA-1 mismatch (expected ${ROM_SHA1})"
