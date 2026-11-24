@@ -84,3 +84,10 @@ def test_env_crash_marks_critical(tmp_path):
     health = json.loads((tmp_path / "t" / "health.json").read_text())
     assert health["status"] == "CRITICAL" and "env_crash" in health["reasons"]
     assert _ckpts(tmp_path)
+
+
+def test_torch_threads_leave_cores_for_envs():
+    from gameboy_rl.train import torch_threads
+
+    assert torch_threads(cpu_count=32, n_envs=16) == 16
+    assert torch_threads(cpu_count=32, n_envs=32) == 2
