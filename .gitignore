@@ -12,3 +12,10 @@ session_*
 PokemonRed.gb.state
 venv*
 .python-version
+# gameboy-rl
+roms/
+*.gbc
+.venv/
+runs/
+.pytest_cache/
+.superpowers/
