@@ -7,10 +7,12 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import time
 from pathlib import Path
 from typing import Callable
 
+import torch
 from stable_baselines3 import PPO
 from stable_baselines3.common.callbacks import BaseCallback, CallbackList
 from stable_baselines3.common.logger import Logger, make_output_format
@@ -35,11 +37,23 @@ SCHEDULE_OVERRIDES = {"learning_rate": LEARNING_RATE, "lr_schedule": LEARNING_RA
 ENV_CRASH_ERRORS = (EOFError, BrokenPipeError, ConnectionResetError)
 
 
+def torch_threads(cpu_count: int, n_envs: int) -> int:
+    """CPU pods: leave one core per emulator process, give torch the rest (at least 2)."""
+    return max(2, cpu_count - n_envs)
+
+
+def _size_torch_threads(cfg: Settings) -> None:
+    if not torch.cuda.is_available():
+        torch.set_num_threads(torch_threads(os.cpu_count() or 2, cfg.n_envs))
+
+
 def build_model(cfg: Settings, env: VecEnv) -> PPO:
+    _size_torch_threads(cfg)
     return PPO("MultiInputPolicy", env, n_steps=cfg.n_steps, seed=cfg.seed, verbose=0, **PPO_PARAMS)
 
 
 def load_model(path: Path, cfg: Settings, env: VecEnv) -> PPO:
+    _size_torch_threads(cfg)
     """Load a checkpoint and re-size its rollout buffer to this run's n_steps/n_envs (as baseline_fast_v2 does)."""
     model = PPO.load(path, env=env, custom_objects=SCHEDULE_OVERRIDES)
     model.n_steps = cfg.n_steps
