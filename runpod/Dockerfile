@@ -1,4 +1,4 @@
-# gameboy-rl training image (archetype B). Build it in CI (no workflow in this repo yet) — never on the laptop.
+# gameboy-rl training image (archetype B). Built by .github/workflows/build-push.yml — never on the laptop.
 # No ROM ever goes into the image: the pod pulls it from private GCS and deletes it there (entrypoint.sh).
 FROM nvidia/cuda:12.8.0-devel-ubuntu22.04
 

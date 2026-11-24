@@ -1,6 +1,6 @@
 # RunPod runbook — gameboy-rl
 
-Build the image in CI (none in this repo yet — copy sega-rl's `build-push.yml` / `deploy-runpod.yml` when wiring it);
+The image is built in CI (`.github/workflows/build-push.yml`) and launched with `make launch` (`deploy-runpod.yml`);
 never `docker build` on the laptop. The image contains no ROM and no checkpoint.
 
 ## Before a launch (per run)
