@@ -31,7 +31,7 @@ upload-inputs:  ## Per launch: ROM (+ init checkpoint) to the PRIVATE bucket; th
 	gcloud storage cp -n v2/runs/poke_26214400.zip $(GCS_ROOT)/init/
 
 launch: upload-inputs  ## Upload ROM + init checkpoint, then start a pod [ARGS="-f n_envs=32"]
-	gh workflow run deploy-runpod.yml $(ARGS)
+	gh workflow run deploy-runpod.yml -R juan-garassino/gameboy-rl $(ARGS)
 
 clean:  ## Remove caches and local runs
 	rm -rf .pytest_cache runs **/__pycache__
