@@ -13,7 +13,7 @@ FAKE_ROM_SHA1 = hashlib.sha1(FAKE_ROM).hexdigest()
 
 # cp/rsync from gs:// write a file at the destination (last arg) so the entrypoint sees real files.
 GSUTIL = r'''#!/usr/bin/env bash
-echo "gsutil $*" >> "$CALLS"
+echo "gcloud $*" >> "$CALLS"
 dest="${@: -1}"
 case "$*" in
   *stat*DONE*) [ "${STUB_DONE:-0}" = 1 ] && exit 0 || exit 1 ;;
@@ -56,7 +56,7 @@ def _trainer_line(calls: str) -> str | None:
 def _run(tmp_path: Path, **env_overrides) -> tuple[int, str, Path]:
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir(exist_ok=True)
-    for name, body in {"gsutil": GSUTIL, "curl": CURL, "gameboy-rl": TRAINER}.items():
+    for name, body in {"gsutil": "#!/usr/bin/env bash\necho \"gsutil $*\" >> \"$CALLS\"\n", "gcloud": GSUTIL, "curl": CURL, "gameboy-rl": TRAINER}.items():
         (bin_dir / name).write_text(body)
         (bin_dir / name).chmod(0o755)
     calls = tmp_path / "calls.log"
@@ -66,7 +66,7 @@ def _run(tmp_path: Path, **env_overrides) -> tuple[int, str, Path]:
         "PATH": f"{bin_dir}:{os.environ['PATH']}", "CALLS": str(calls), "WORKSPACE_DIR": str(ws),
         "APP_DIR": str(REPO), "RUN_ID": "t", "GCS_BUCKET": "bucket", "MODE": "train",
         "RUNPOD_POD_ID": "pod1", "RUNPOD_API_KEY": "k", "SYNC_INTERVAL": "3600", "HOME": str(tmp_path),
-        "ROM_SHA1": FAKE_ROM_SHA1, "POD_SELF_BACKOFF": "0",
+        "ROM_SHA1": FAKE_ROM_SHA1, "POD_SELF_BACKOFF": "0", "FAIL_LINGER": "0",
     }
     env.update(env_overrides)
     proc = subprocess.run(["bash", str(REPO / "runpod" / "entrypoint.sh")], env=env, capture_output=True,
@@ -113,7 +113,7 @@ def test_rom_already_on_disk_skips_pull(tmp_path):
     rom.write_bytes(FAKE_ROM)
     rc, calls, _ = _run(tmp_path, STUB_ROM_MISSING="1")
     assert rc == 0
-    assert "roms/" not in "\n".join(ln for ln in calls.splitlines() if ln.startswith("gsutil"))
+    assert "roms/" not in "\n".join(ln for ln in calls.splitlines() if ln.startswith("gcloud"))
     assert _trainer_line(calls) is not None
 
 
@@ -200,6 +200,13 @@ def test_terminate_retries_on_graphql_errors(tmp_path):
     assert calls.count("podTerminate") == 3
 
 
-def test_gsutil_wrapped_in_timeout():
+def test_gcloud_storage_wrapped_in_timeout():
     script = (REPO / "runpod" / "entrypoint.sh").read_text()
-    assert 'timeout "$GCS_TIMEOUT" gsutil' in script
+    assert 'timeout "$GCS_TIMEOUT" gcloud storage' in script
+
+
+def test_uses_gcloud_storage_not_gsutil(tmp_path):
+    # gsutil ignores CLOUDSDK_AUTH_ACCESS_TOKEN and calls GCS anonymously (401).
+    _, calls, _ = _run(tmp_path)
+    assert "gsutil" not in calls
+    assert "gcloud storage" in calls
