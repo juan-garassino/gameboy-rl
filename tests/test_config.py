@@ -54,3 +54,9 @@ def test_budget_without_cost_uses_max_hours():
 def test_run_dir(tmp_path):
     s = Settings(runs_dir=tmp_path, run_id="abc")
     assert s.run_dir == tmp_path / "abc"
+
+
+def test_n_envs_must_be_even():
+    # v2/tensorboard_callback.py rearranges the explore maps into 2 rows: an odd n_envs crashes at episode end.
+    with pytest.raises(ValueError):
+        Settings(n_envs=3)

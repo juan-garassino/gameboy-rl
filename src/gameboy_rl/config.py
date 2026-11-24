@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from pathlib import Path
 
-from pydantic import Field
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 REPO_ROOT = Path(__file__).resolve().parents[2]  # editable install: /app in the pod, the clone locally
@@ -51,6 +51,14 @@ class Settings(BaseSettings):
     fps_warn_frac: float = 0.5  # GBRL_FPS_WARN_FRAC=0.5
     fps_zero_secs: float = 300.0  # GBRL_FPS_ZERO_SECS=300 (also the hang watchdog)
     button_spam_frac: float = 0.9  # GBRL_BUTTON_SPAM_FRAC=0.9
+
+    @field_validator("n_envs")
+    @classmethod
+    def _even_n_envs(cls, v: int) -> int:
+        # v2/tensorboard_callback.py rearranges explore maps into 2 rows at every episode end.
+        if v < 2 or v % 2:
+            raise ValueError(f"n_envs must be even and >= 2, got {v}")
+        return v
 
     @property
     def steps(self) -> int:
