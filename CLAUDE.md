@@ -17,6 +17,8 @@ Template for all monitoring + RunPod plumbing: `../RL-sega-rl` (keep the two cop
 | `train.py` | `run()`: baseline_fast_v2 PPO params, resume (run ckpt > `GBRL_RESUME_FROM`), checkpoints → MLflow, health, budget, PWhiddy's `TensorboardCallback`, any crash → CRITICAL, DONE in `finally` |
 | `check_start.py` | `text_box_visible(frame)` heuristic, `run()` → `runs/check_start{,_first}.png` |
 | `status.py` | `gameboy-rl status <run>`: live state from MLflow |
+| `silver.py` | Pokémon Silver in color: `SilverEnv`, `SilverStats` (RAM from pret symbols, high-water marks so doing nothing earns 0), baselines |
+| `silver_eval.py` | `SilverEvalCallback`: baselines first (refuses to train if doing nothing pays), then color video + outcome stats |
 | `play.py` | `gameboy-rl play --model X --video out.mp4`: local headless replay of a checkpoint (the trainer records no eval videos) |
 | `cli.py` | `gameboy-rl train|smoke|check-start|status` (argparse) |
 
@@ -47,3 +49,8 @@ All `Settings` fields map to `GBRL_<FIELD>` (inline comments in `config.py`). Po
 `GCS_BUCKET`, `GCS_ACCESS_TOKEN`, `GCS_TIMEOUT`, `INIT_CKPT`, `ROM_SHA1`, `RUNPOD_API_KEY`/`GBRL_RUNPOD_API_KEY`,
 `RUNPOD_POD_ID` (injected), `SYNC_INTERVAL`, `MLFLOW_*` (`MLFLOW_HTTP_REQUEST_MAX_RETRIES=2`, `…_TIMEOUT=20` set by
 the entrypoint).
+
+## Silver
+
+`make launch-silver` uploads the ROM and `roms/claude_totodile.state` (player CLAUDE, Totodile, outside Elm's lab; never in git)
+and deploys `mode=train-silver`. Judge it by badges / events / maps against `baseline/*`, never by reward or loss.

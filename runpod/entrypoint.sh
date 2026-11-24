@@ -60,8 +60,16 @@ RUN_ID="${RUN_ID:?RUN_ID not set}"
 GCS_BUCKET="${GCS_BUCKET:?GCS_BUCKET not set}"
 SYNC_INTERVAL="${SYNC_INTERVAL:-600}"
 INIT_CKPT="${INIT_CKPT-poke_26214400.zip}"
-ROM_NAME="pokemon_red_version.gb"
-ROM_SHA1="${ROM_SHA1-ea9bcae617fdf159b045185467ae58b2e4a48b9a}"
+STATE_NAME=""  # start state pulled next to the ROM (Silver's is never in git)
+if [ "${GBRL_GAME:-red}" = silver ]; then
+    ROM_NAME="pokemon_silver_version.gbc"
+    ROM_SHA1="${ROM_SHA1-49b163f7e57702bc939d642a18f591de55d92dae}"
+    STATE_NAME="claude_totodile.state"
+    export GBRL_EP_LENGTH="${GBRL_EP_LENGTH:-32768}" GBRL_CKPT_FREQ="${GBRL_CKPT_FREQ:-500000}"
+else
+    ROM_NAME="pokemon_red_version.gb"
+    ROM_SHA1="${ROM_SHA1-ea9bcae617fdf159b045185467ae58b2e4a48b9a}"
+fi
 
 GCS_ROOT="gs://${GCS_BUCKET}/gameboy-rl"
 RUN_DIR="${WORKSPACE_DIR}/runs/${RUN_ID}"
@@ -113,6 +121,12 @@ else
         write_health CRITICAL rom
         exit 1
     fi
+    if [ -n "$STATE_NAME" ] && ! gcs cp "${GCS_ROOT}/roms/${STATE_NAME}" "${WORKSPACE_DIR}/roms/${STATE_NAME}"; then
+        log "start state ${STATE_NAME} missing"
+        gcs rm "${GCS_ROOT}/roms/**" || log "could not delete ROMs from GCS — remove them by hand"
+        write_health CRITICAL state
+        exit 1
+    fi
     # ROMs are uploaded right before each launch and must not stay in GCS (Juan's rule).
     gcs rm "${GCS_ROOT}/roms/**" || log "could not delete ROMs from GCS — remove them by hand"
 fi
@@ -122,6 +136,8 @@ if [ -n "$ROM_SHA1" ] && [ "$(sha1sum "$ROM_LOCAL" | cut -d' ' -f1)" != "$ROM_SH
     write_health CRITICAL rom
     exit 1
 fi
+
+[ -n "$STATE_NAME" ] && export GBRL_INIT_STATE="${WORKSPACE_DIR}/roms/${STATE_NAME}"
 
 GBRL_COST_PER_HR_USD="$(bash "$POD_SELF" cost)"
 export GBRL_COST_PER_HR_USD

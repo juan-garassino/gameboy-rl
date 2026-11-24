@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Literal
 
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -22,6 +23,7 @@ def repo_path(p: Path) -> Path:
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="GBRL_", extra="ignore")
 
+    game: Literal["red", "silver"] = "red"  # GBRL_GAME=silver (color, player CLAUDE; see silver.py)
     init_state: Path = Path("has_pokedex_nballs.state")  # GBRL_INIT_STATE=init.state (past Oak's intro + parcel)
     rom_path: Path = Path("roms/pokemon_red_version.gb")  # GBRL_ROM_PATH=/workspace/roms/pokemon_red_version.gb
     run_id: str = Field(default_factory=_utc_run_id)  # GBRL_RUN_ID=20261124-150000
@@ -33,6 +35,8 @@ class Settings(BaseSettings):
     keep_ckpts: int = 3  # GBRL_KEEP_CKPTS=3
     runs_dir: Path = Path("runs")  # GBRL_RUNS_DIR=/workspace/runs
     resume_from: Path | None = None  # GBRL_RESUME_FROM=/workspace/init/poke_26214400.zip (when no run ckpt yet)
+    eval_freq: int = 500_000  # GBRL_EVAL_FREQ=500000 (silver: color video + outcome stats)
+    eval_steps: int = 1500  # GBRL_EVAL_STEPS=1500 (agent steps per eval/baseline episode, ~10 min of game)
     stream: bool = False  # GBRL_STREAM=true (broadcasts coords to PWhiddy's PUBLIC map; off for privacy)
     stream_user: str = "gameboy-rl"  # GBRL_STREAM_USER=gameboy-rl (name shown on the public map)
     stop_on_critical: bool = True  # GBRL_STOP_ON_CRITICAL=false

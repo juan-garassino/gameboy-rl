@@ -208,8 +208,13 @@ def run(cfg: Settings, env_factory: Callable[[Settings], VecEnv] = make_vec_env)
         else:
             model = build_model(cfg, env)
         model.set_logger(_make_logger(run_dir))
-        TensorboardCallback = import_upstream("tensorboard_callback").TensorboardCallback
-        callbacks = CallbackList([keeper, progress, health, TensorboardCallback(str(run_dir / "tb")), budget])
+        if cfg.game == "silver":
+            from gameboy_rl.silver_eval import SilverEvalCallback
+
+            game_callback = SilverEvalCallback(cfg, run_dir, heartbeat=health.heartbeat)
+        else:
+            game_callback = import_upstream("tensorboard_callback").TensorboardCallback(str(run_dir / "tb"))
+        callbacks = CallbackList([keeper, progress, health, game_callback, budget])
         remaining = cfg.total_steps - model.num_timesteps
         if remaining > 0:
             # log_interval=10: each dump is a round of MLflow HTTPS calls; per-iteration costs throughput.

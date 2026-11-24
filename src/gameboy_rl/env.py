@@ -96,6 +96,12 @@ def import_upstream(module: str):
 
 def make_env(rank: int, cfg: Settings, session_path: Path) -> Callable[[], gym.Env]:
     def _init() -> gym.Env:
+        if cfg.game == "silver":
+            from gameboy_rl.silver import SilverEnv
+
+            env = Monitor(ButtonsWrapper(SilverEnv(cfg)))
+            env.reset(seed=cfg.seed + rank)
+            return env
         env = make_red_env(cfg, session_path)
         if cfg.stream:
             StreamWrapper = import_upstream("stream_agent_wrapper").StreamWrapper
