@@ -1,0 +1,15 @@
+roms/
+*.gb
+*.gbc
+*.sav
+*.ram
+runs/
+v2/runs/
+_upstream/
+assets/
+*.ipynb
+.venv/
+.git/
+.superpowers/
+.pytest_cache/
+tests/
