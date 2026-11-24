@@ -8,6 +8,10 @@ name: deploy-runpod
 on:
   workflow_dispatch:
     inputs:
+      init_ckpt:
+        description: 'Checkpoint in gs://.../gameboy-rl/init/ to start from ("" = fresh policy)'
+        required: false
+        default: 'poke_26214400.zip'
       mode:
         description: 'Mode'
         required: true
@@ -91,14 +95,14 @@ jobs:
         run: |
           set -euo pipefail
           ENV_JSON=$(jq -nc \
-            --arg mode "${{ inputs.mode }}" --arg run_id "$RUN_ID" \
+            --arg mode "${{ inputs.mode }}" --arg init_ckpt "${{ inputs.init_ckpt }}" --arg run_id "$RUN_ID" \
             --arg steps "${{ inputs.total_steps }}" --arg n_envs "${{ inputs.n_envs }}" \
             --arg max_hours "${{ inputs.max_hours }}" --arg max_eur "${{ inputs.max_eur }}" \
             --arg token "$GCS_ACCESS_TOKEN" --arg api_key "$RUNPOD_API_KEY" \
             --arg ml_user "$MLFLOW_USER" --arg ml_pass "$MLFLOW_PASS" \
             '[
               {key:"MODE", value:$mode}, {key:"RUN_ID", value:$run_id},
-              {key:"GBRL_N_ENVS", value:$n_envs}, {key:"GBRL_MAX_HOURS", value:$max_hours},
+              {key:"INIT_CKPT", value:$init_ckpt}, {key:"GBRL_N_ENVS", value:$n_envs}, {key:"GBRL_MAX_HOURS", value:$max_hours},
               {key:"GCS_BUCKET", value:"garassino-ml-artifacts"}, {key:"GCS_ACCESS_TOKEN", value:$token},
               {key:"GBRL_RUNPOD_API_KEY", value:$api_key},
               {key:"MLFLOW_TRACKING_URI", value:"https://garassino-mlflow-920423386248.europe-west1.run.app"},
