@@ -187,3 +187,18 @@ def test_watchdog_fires_on_stall(tmp_path):
     data = json.loads((tmp_path / "h.json").read_text())
     assert data["status"] == "CRITICAL" and "stalled" in data["reasons"]
     cb.on_training_end()
+
+
+def test_rollout_end_refreshes_heartbeat(tmp_path):
+    cb = HealthCallback(HealthMonitor(Settings(total_steps=TOTAL)), tmp_path / "h.json",
+                        on_critical=lambda r: None, stall_secs=None)
+    model = _StubModel()
+    cb.init_callback(model)
+    cb.locals = {"infos": []}
+    cb._last_progress = 0.0
+    model.num_timesteps = 2048
+    cb.on_rollout_end()
+    assert cb._last_progress > 0.0
+    cb._last_progress = 0.0
+    cb.heartbeat()
+    assert cb._last_progress > 0.0

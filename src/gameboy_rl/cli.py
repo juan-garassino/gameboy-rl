@@ -42,7 +42,11 @@ def settings_from_args(args: argparse.Namespace) -> Settings:
 def _cmd_train(args: argparse.Namespace) -> int:
     from gameboy_rl import train
 
-    status = train.run(settings_from_args(args))
+    try:
+        status = train.run(settings_from_args(args))
+    except train.TrackingUnavailable as e:
+        logger.error("%s", e)
+        return 4
     print(status)
     return 0 if status != "critical" else 2
 

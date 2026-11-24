@@ -29,7 +29,7 @@ class Settings(BaseSettings):
     n_envs: int = 32  # GBRL_N_ENVS=32 (~ pod vCPUs)
     ep_length: int = 2048 * 80  # GBRL_EP_LENGTH=163840 (agent steps per episode; PPO n_steps = ep_length // 64)
     seed: int = 0  # GBRL_SEED=0
-    ckpt_freq: int = 1_000_000  # GBRL_CKPT_FREQ=1000000
+    ckpt_freq: int = 5_000_000  # GBRL_CKPT_FREQ=5000000 (each checkpoint, ~15 MB, is also uploaded to MLflow)
     keep_ckpts: int = 3  # GBRL_KEEP_CKPTS=3
     runs_dir: Path = Path("runs")  # GBRL_RUNS_DIR=/workspace/runs
     resume_from: Path | None = None  # GBRL_RESUME_FROM=/workspace/init/poke_26214400.zip (when no run ckpt yet)

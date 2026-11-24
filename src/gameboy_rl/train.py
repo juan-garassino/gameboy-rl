@@ -50,13 +50,22 @@ def load_model(path: Path, cfg: Settings, env: VecEnv) -> PPO:
     return model
 
 
-class CheckpointKeeper(BaseCallback):
-    """Saves ckpt_<steps>.zip every cfg.ckpt_freq steps, keeping the newest cfg.keep_ckpts."""
+class TrackingUnavailable(RuntimeError):
+    """MLFLOW_TRACKING_URI is set but the run could not be opened or the artifact probe failed."""
 
-    def __init__(self, cfg: Settings, ckpt_dir: Path):
+
+class CheckpointKeeper(BaseCallback):
+    """Saves ckpt_<steps>.zip every cfg.ckpt_freq steps, keeping the newest cfg.keep_ckpts locally.
+
+    Each checkpoint also goes to MLflow right away: after the pod's 1 h GCS token expires it is the only
+    durable copy. `heartbeat` keeps the stall watchdog quiet during the upload.
+    """
+
+    def __init__(self, cfg: Settings, ckpt_dir: Path, heartbeat: Callable[[], None] = lambda: None):
         super().__init__()
         self.cfg = cfg
         self.ckpt_dir = ckpt_dir
+        self.heartbeat = heartbeat
         self.next_save = cfg.ckpt_freq
 
     def _on_training_start(self) -> None:
@@ -67,6 +76,9 @@ class CheckpointKeeper(BaseCallback):
         self.model.save(path)
         for old in sorted(self.ckpt_dir.glob("ckpt_*.zip"))[: -self.cfg.keep_ckpts]:
             old.unlink()
+        self.heartbeat()
+        mlflow_tracking.log_artifact(path, "checkpoints")
+        self.heartbeat()
         return path
 
     def _on_step(self) -> bool:
@@ -144,22 +156,18 @@ def _resume_source(cfg: Settings, ckpt_dir: Path) -> Path | None:
 
 
 def run(cfg: Settings, env_factory: Callable[[Settings], VecEnv] = make_vec_env) -> str:
-    """Train (or resume) until cfg.total_steps, CRITICAL health, or the time budget. Returns done|critical|budget."""
+    """Train (or resume) until cfg.total_steps, CRITICAL health, or the time budget. Returns done|critical|budget.
+
+    Raises TrackingUnavailable (before any env exists, no DONE) when MLflow is configured but unreachable.
+    Every other failure is caught: CRITICAL health, final checkpoint, DONE and MLflow uploads happen on every exit.
+    """
     run_dir = cfg.run_dir
     ckpt_dir = run_dir / "checkpoints"
     ckpt_dir.mkdir(parents=True, exist_ok=True)
     resume_from = _resume_source(cfg, ckpt_dir)
-    (run_dir / "config.json").write_text(cfg.model_dump_json(indent=2))
+    config_json = run_dir / "config.json"
+    config_json.write_text(cfg.model_dump_json(indent=2))
     deadline = time.time() + cfg.hours_budget * 3600
-
-    env = env_factory(cfg)
-    if resume_from:
-        logger.info("resuming from %s", resume_from)
-        model = load_model(resume_from, cfg, env)
-    else:
-        model = build_model(cfg, env)
-    model.set_logger(_make_logger(run_dir))
-    mlflow_tracking.start(cfg)
 
     health = HealthCallback(
         HealthMonitor(cfg),
@@ -168,41 +176,61 @@ def run(cfg: Settings, env_factory: Callable[[Settings], VecEnv] = make_vec_env)
         stall_secs=cfg.fps_zero_secs,
         on_report=HealthReporter(run_dir / "health.json"),
     )
-    keeper = CheckpointKeeper(cfg, ckpt_dir)
+    if mlflow_tracking.enabled() and not mlflow_tracking.start(cfg, probe=config_json):
+        health.write(health.monitor.mark_critical("mlflow"))
+        raise TrackingUnavailable("MLFLOW_TRACKING_URI is set but MLflow is unusable; refusing to train blind")
+
+    keeper = CheckpointKeeper(cfg, ckpt_dir, heartbeat=health.heartbeat)
     budget = BudgetCallback(deadline)
     progress = ProgressCallback()
-    TensorboardCallback = import_upstream("tensorboard_callback").TensorboardCallback
-    callbacks = CallbackList([keeper, progress, health, TensorboardCallback(str(run_dir / "tb")), budget])
-
-    status = "done"
-    remaining = cfg.total_steps - model.num_timesteps
+    env: VecEnv | None = None
+    model: PPO | None = None
+    status = "critical"  # until learn() returns normally
     try:
+        env = env_factory(cfg)
+        if resume_from:
+            logger.info("resuming from %s", resume_from)
+            model = load_model(resume_from, cfg, env)
+        else:
+            model = build_model(cfg, env)
+        model.set_logger(_make_logger(run_dir))
+        TensorboardCallback = import_upstream("tensorboard_callback").TensorboardCallback
+        callbacks = CallbackList([keeper, progress, health, TensorboardCallback(str(run_dir / "tb")), budget])
+        remaining = cfg.total_steps - model.num_timesteps
         if remaining > 0:
+            # log_interval=10: each dump is a round of MLflow HTTPS calls; per-iteration costs throughput.
             model.learn(total_timesteps=remaining, callback=callbacks, reset_num_timesteps=resume_from is None,
-                        log_interval=1)
+                        log_interval=10)
         if health.last_report and health.last_report.status == "CRITICAL":
             status = "critical"
         elif budget.hit:
             status = "budget"
-    except ENV_CRASH_ERRORS as e:
-        logger.exception("environment worker crashed: %s", e)
-        health.write(health.monitor.mark_critical("env_crash"))
+        else:
+            status = "done"
+    except Exception as e:
+        reason = "env_crash" if isinstance(e, ENV_CRASH_ERRORS) else "crash"
+        logger.exception("training failed (%s): %s", reason, e)
+        health.write(health.monitor.mark_critical(reason))
         status = "critical"
     finally:
-        keeper.model = model
-        final_ckpt = keeper.save()
-        try:
-            env.close()
-        except Exception:
-            logger.exception("env.close failed")
-
-    if progress.last:
-        (run_dir / "progress.json").write_text(json.dumps(progress.last, indent=2))
-    (run_dir / "DONE").write_text(status)
-    for artifact in ("health.json", "progress.json", "DONE"):
-        if (run_dir / artifact).exists():
-            mlflow_tracking.log_artifact(run_dir / artifact)
-    mlflow_tracking.log_artifact(final_ckpt, "checkpoints")
-    mlflow_tracking.end(status)
-    logger.info("run %s finished: %s at %d steps", cfg.run_id, status, model.num_timesteps)
+        if model is not None:
+            keeper.model = model
+            try:
+                keeper.save()  # also uploads it to MLflow
+            except Exception:
+                logger.exception("final checkpoint failed")
+        if env is not None:
+            try:
+                env.close()
+            except Exception:
+                logger.exception("env.close failed")
+        if progress.last:
+            (run_dir / "progress.json").write_text(json.dumps(progress.last, indent=2))
+        (run_dir / "DONE").write_text(status)
+        for artifact in ("health.json", "progress.json", "DONE"):
+            if (run_dir / artifact).exists():
+                mlflow_tracking.log_artifact(run_dir / artifact)
+        mlflow_tracking.end(status)
+        steps = model.num_timesteps if model is not None else 0
+        logger.info("run %s finished: %s at %d steps", cfg.run_id, status, steps)
     return status

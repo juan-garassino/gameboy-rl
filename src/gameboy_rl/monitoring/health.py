@@ -145,8 +145,24 @@ def _finite(value) -> bool:
     return bool(np.isfinite(np.asarray(value, dtype=np.float64)).all())
 
 
+def report_stall(report: HealthReport) -> None:
+    """Best-effort: mark the MLflow run CRITICAL/stalled (the pod's only durable channel after 1 h)."""
+    from gameboy_rl.monitoring import mlflow_tracking
+
+    try:
+        mlflow_tracking.set_tag("health_status", "CRITICAL")
+        mlflow_tracking.set_tag("health_reasons", ",".join(report.reasons))
+        mlflow_tracking.end("stalled")
+    except Exception:
+        logger.exception("could not report the stall to mlflow")
+
+
 def _exit_on_stall(report: HealthReport) -> None:
     logger.critical("training stalled for too long, exiting: %s", report.reasons)
+    # MLflow calls are bounded by MLFLOW_HTTP_REQUEST_TIMEOUT/RETRIES (entrypoint); never wait > 60 s on them.
+    reporter = threading.Thread(target=report_stall, args=(report,), daemon=True)
+    reporter.start()
+    reporter.join(timeout=60)
     os._exit(3)
 
 
@@ -204,8 +220,12 @@ class HealthCallback(BaseCallback):
                 self.on_stall(report)
                 return
 
-    def _on_step(self) -> bool:
+    def heartbeat(self) -> None:
+        """Proof of life for the watchdog; also called around slow work outside env steps (uploads)."""
         self._last_progress = time.monotonic()
+
+    def _on_step(self) -> bool:
+        self.heartbeat()
         for info in self.locals.get("infos", []):
             b = info.get("buttons")
             if b is None:
@@ -216,6 +236,7 @@ class HealthCallback(BaseCallback):
         return not self._stop
 
     def _on_rollout_end(self) -> None:
+        self.heartbeat()
         values = self.logger.name_to_value
         now = time.monotonic()
         t_prev, steps_prev = self._last_rollout
@@ -246,7 +267,8 @@ class HealthCallback(BaseCallback):
         report = self.monitor.update(snap)
         self.write(report)
         if self.on_report is not None:
-            self.on_report(report)
+            self.on_report(report)  # may upload health.json to MLflow
+            self.heartbeat()
         self.logger.record("health/status", _RANK[report.status])
         if report.status != "HEALTHY":
             logger.warning("health %s: %s", report.status, ", ".join(report.reasons))

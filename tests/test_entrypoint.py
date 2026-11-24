@@ -36,10 +36,14 @@ CURL = r'''#!/usr/bin/env bash
 echo "curl $*" >> "$CALLS"
 case "$*" in
   *costPerHr*) echo '{"data":{"pod":{"costPerHr":0.5}}}' ;;
-  *) echo '{"data":{"podTerminate":null}}' ;;
+  *podTerminate*)
+    n=$(( $(cat "$CALLS.term" 2>/dev/null || echo 0) + 1 )); echo "$n" > "$CALLS.term"
+    if [ "$n" -le "${STUB_TERMINATE_FAILS:-0}" ]; then echo '{"errors":[{"message":"boom"}]}'
+    else echo '{"data":{"podTerminate":null}}'; fi ;;
 esac
 '''
 TRAINER = r'''#!/usr/bin/env bash
+echo "mlflow retries=${MLFLOW_HTTP_REQUEST_MAX_RETRIES:-} timeout=${MLFLOW_HTTP_REQUEST_TIMEOUT:-}" >> "$CALLS"
 echo "gameboy-rl $* cost=${GBRL_COST_PER_HR_USD:-} rom=${GBRL_ROM_PATH:-} resume=${GBRL_RESUME_FROM:-}" >> "$CALLS"
 exit "${STUB_TRAIN_RC:-0}"
 '''
@@ -62,7 +66,7 @@ def _run(tmp_path: Path, **env_overrides) -> tuple[int, str, Path]:
         "PATH": f"{bin_dir}:{os.environ['PATH']}", "CALLS": str(calls), "WORKSPACE_DIR": str(ws),
         "APP_DIR": str(REPO), "RUN_ID": "t", "GCS_BUCKET": "bucket", "MODE": "train",
         "RUNPOD_POD_ID": "pod1", "RUNPOD_API_KEY": "k", "SYNC_INTERVAL": "3600", "HOME": str(tmp_path),
-        "ROM_SHA1": FAKE_ROM_SHA1,
+        "ROM_SHA1": FAKE_ROM_SHA1, "POD_SELF_BACKOFF": "0",
     }
     env.update(env_overrides)
     proc = subprocess.run(["bash", str(REPO / "runpod" / "entrypoint.sh")], env=env, capture_output=True,
@@ -176,3 +180,26 @@ def test_local_run_without_pod_id_skips_terminate(tmp_path):
     rc, calls, _ = _run(tmp_path, RUNPOD_POD_ID="")
     assert rc == 0
     assert "podTerminate" not in calls
+
+
+def test_missing_required_env_still_removes_pod(tmp_path):
+    rc, calls, _ = _run(tmp_path, RUN_ID="")
+    assert rc != 0
+    assert "podTerminate" in calls
+    assert _trainer_line(calls) is None
+
+
+def test_mlflow_http_limits_exported(tmp_path):
+    _, calls, _ = _run(tmp_path)
+    assert "mlflow retries=2 timeout=20" in calls
+
+
+def test_terminate_retries_on_graphql_errors(tmp_path):
+    rc, calls, _ = _run(tmp_path, STUB_TERMINATE_FAILS="2")
+    assert rc == 0
+    assert calls.count("podTerminate") == 3
+
+
+def test_gsutil_wrapped_in_timeout():
+    script = (REPO / "runpod" / "entrypoint.sh").read_text()
+    assert 'timeout "$GCS_TIMEOUT" gsutil' in script

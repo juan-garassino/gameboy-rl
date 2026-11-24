@@ -15,7 +15,7 @@ if [ -z "$POD_ID" ] || [ -z "$API_KEY" ]; then
 fi
 
 gql() {
-    curl -s -X POST https://api.runpod.io/graphql -H "Authorization: Bearer ${API_KEY}" \
+    curl -s --max-time 30 -X POST https://api.runpod.io/graphql -H "Authorization: Bearer ${API_KEY}" \
         -H "Content-Type: application/json" -d "$1"
 }
 
@@ -27,8 +27,19 @@ try: print(json.load(sys.stdin)["data"]["pod"]["costPerHr"] or 0)
 except Exception: print(0)'
         ;;
     remove)
-        echo "pod_self: terminating pod ${POD_ID}" >&2
-        gql "{\"query\":\"mutation { podTerminate(input: {podId: \\\"${POD_ID}\\\"}) }\"}" >/dev/null
+        # Billing only stops if this succeeds: retry with backoff; a GraphQL "errors" field is a failure too.
+        backoff="${POD_SELF_BACKOFF:-2}"
+        for attempt in 1 2 3 4 5; do
+            echo "pod_self: terminating pod ${POD_ID} (attempt ${attempt})" >&2
+            resp="$(gql "{\"query\":\"mutation { podTerminate(input: {podId: \\\"${POD_ID}\\\"}) }\"}")"
+            if [ -n "$resp" ] && ! printf '%s' "$resp" | grep -q '"errors"'; then
+                exit 0
+            fi
+            echo "pod_self: terminate failed: ${resp:-no response}" >&2
+            [ "$attempt" -lt 5 ] && sleep $((backoff * attempt * attempt))
+        done
+        echo "pod_self: could not terminate pod ${POD_ID} — STOP IT BY HAND" >&2
+        exit 1
         ;;
     *)
         echo "unknown command: $CMD" >&2

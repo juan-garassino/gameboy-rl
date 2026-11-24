@@ -5,7 +5,7 @@ credentials — this is the durable channel once the pod's 1 h GCS token has exp
 
 Active only when MLFLOW_TRACKING_URI is set (the RunPod job); everything no-ops locally.
 Auth: the API sits behind MLflow basic auth — mlflow reads MLFLOW_TRACKING_USERNAME / MLFLOW_TRACKING_PASSWORD.
-A tracker error never fails a training run.
+Once started, a tracker error never fails a training run (start() itself is fail-fast, see train.run).
 """
 from __future__ import annotations
 
@@ -20,6 +20,7 @@ from gameboy_rl.config import Settings
 logger = logging.getLogger(__name__)
 
 EXPERIMENT = "gameboy-rl"
+ARTIFACT_LOCATION = f"mlflow-artifacts:/{EXPERIMENT}"  # proxied by the server (--serve-artifacts), no GCS creds
 _active = False  # True only after start() succeeded; otherwise mlflow would auto-create stray runs
 
 
@@ -48,17 +49,42 @@ def _safe(fn):
     return wrapper
 
 
-@_safe
-def start(cfg: Settings) -> None:
-    global _active
-    import mlflow
+def start(cfg: Settings, probe: Path | None = None) -> bool:
+    """Open the run; with `probe`, also upload it (proves the artifact proxy works). False on any failure.
 
-    mlflow.set_tracking_uri(os.environ["MLFLOW_TRACKING_URI"])
-    mlflow.set_experiment(EXPERIMENT)
-    mlflow.start_run(run_name=cfg.run_id)
-    mlflow.set_tag("game", "pokemon-red")
-    mlflow.log_params({k: str(v) for k, v in cfg.model_dump().items()})
+    train.run treats False as fatal when MLFLOW_TRACKING_URI is set: no 6 h run without a durable channel.
+    """
+    global _active
+    if not enabled():
+        return False
+    try:
+        import mlflow
+
+        mlflow.set_tracking_uri(os.environ["MLFLOW_TRACKING_URI"])
+        exp = mlflow.get_experiment_by_name(EXPERIMENT)
+        if exp is None:
+            mlflow.create_experiment(EXPERIMENT, artifact_location=ARTIFACT_LOCATION)
+        elif getattr(exp, "artifact_location", ARTIFACT_LOCATION) != ARTIFACT_LOCATION:
+            logger.warning("experiment %s stores artifacts at %s, not %s", EXPERIMENT, exp.artifact_location,
+                           ARTIFACT_LOCATION)
+        mlflow.set_experiment(EXPERIMENT)
+        mlflow.start_run(run_name=cfg.run_id)
+        mlflow.set_tag("game", "pokemon-red")
+        mlflow.log_params({k: str(v) for k, v in cfg.model_dump().items()})
+        if probe is not None:
+            mlflow.log_artifact(str(probe))
+    except Exception as e:
+        logger.error("mlflow start failed: %s: %s", type(e).__name__, e)
+        try:
+            import mlflow
+
+            mlflow.end_run(status="FAILED")
+        except Exception:
+            pass
+        _active = False
+        return False
     _active = True
+    return True
 
 
 @_require_active
@@ -71,10 +97,11 @@ def log_metrics(metrics: dict[str, float], step: int) -> None:
 
 @_require_active
 @_safe
-def log_artifact(path: Path, artifact_path: str | None = None) -> None:
+def log_artifact(path: Path, artifact_path: str | None = None) -> bool:
     import mlflow
 
     mlflow.log_artifact(str(path), artifact_path=artifact_path)
+    return True
 
 
 @_require_active
