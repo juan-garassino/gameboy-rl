@@ -161,7 +161,8 @@ def test_stall_limit_and_entropy_bonus_are_settings():
 
     cfg = Settings(game="silver", stall_steps=7, ent_coef=0.02)
     assert cfg.stall_steps == 7 and ppo_params(cfg)["ent_coef"] == 0.02
-    assert ppo_params(Settings())["ent_coef"] == 0.01  # Red keeps PWhiddy's
+    assert ppo_params(Settings())["ent_coef"] == 0.01 and ppo_params(Settings())["n_epochs"] == 1  # Red keeps PWhiddy's
+    assert ppo_params(Settings(game="silver", n_epochs=3))["n_epochs"] == 3
 
 
 def test_hp_fraction_is_big_endian():

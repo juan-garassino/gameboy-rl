@@ -29,11 +29,11 @@ logger = logging.getLogger(__name__)
 # baseline_fast_v2.py: PPO("MultiInputPolicy", env, n_steps=ep_length // 64, batch_size=512, n_epochs=1,
 #                          gamma=0.997, ent_coef=0.01); learning_rate / clip_range are SB3's defaults.
 LEARNING_RATE, CLIP_RANGE = 3e-4, 0.2
-PPO_PARAMS = dict(batch_size=512, n_epochs=1, gamma=0.997, learning_rate=LEARNING_RATE, clip_range=CLIP_RANGE)
+PPO_PARAMS = dict(batch_size=512, gamma=0.997, learning_rate=LEARNING_RATE, clip_range=CLIP_RANGE)
 
 
 def ppo_params(cfg: Settings) -> dict:
-    return {**PPO_PARAMS, "ent_coef": cfg.ent_coef}
+    return {**PPO_PARAMS, "ent_coef": cfg.ent_coef, "n_epochs": cfg.n_epochs}
 
 
 # Checkpoints carry cloudpickled schedule lambdas; PWhiddy's (Python 3.11 bytecode) segfault when called on 3.12.
