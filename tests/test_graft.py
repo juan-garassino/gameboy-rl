@@ -55,3 +55,22 @@ def test_a_grafted_network_decides_and_values_exactly_like_the_old_one():
 def test_removing_an_input_is_refused():
     with pytest.raises(ValueError, match="inputs removed"):
         graft(_model(True, 1), _model(False, 2))
+
+
+def test_adam_counters_leave_the_gpu_after_a_load():
+    from types import SimpleNamespace
+
+    import torch
+
+    from gameboy_rl.train import keep_counters_on_cpu
+
+    class _OnGpu(torch.Tensor):
+        moved = 0
+
+        def cpu(self):
+            _OnGpu.moved += 1
+            return torch.tensor(7.0)
+
+    state = {"a": {"step": torch.tensor(7.0).as_subclass(_OnGpu)}, "b": {}}  # "b" has not been updated yet
+    keep_counters_on_cpu(SimpleNamespace(policy=SimpleNamespace(optimizer=SimpleNamespace(state=state))))
+    assert _OnGpu.moved == 1 and state["a"]["step"].item() == 7.0 and state["b"] == {}
