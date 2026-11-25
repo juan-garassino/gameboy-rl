@@ -55,7 +55,10 @@ def test_the_story_path_pays_more_the_further_it_gets():
         last = s.value()
     assert s.progress()["path"] == len(silver.PATH) and gains == sorted(gains) and gains[0] >= 2.0
     _visit(ram, s, *[(g, n) for g, n, _ in silver.PATH], (24, 4))
-    assert s.value() == pytest.approx(last)  # walking back pays nothing
+    walked_back = s.value()
+    assert walked_back - last <= silver.WEIGHTS["retraced"] * len(silver.PATH)  # a little, once
+    _visit(ram, s, *[(g, n) for g, n, _ in silver.PATH], (24, 4))
+    assert s.value() == pytest.approx(walked_back)  # and then nothing
 
 
 def test_all_the_houses_in_town_pay_less_than_leaving_it():
@@ -79,6 +82,20 @@ def test_walking_the_story_roads_pays_ten_times_walking_around_town():
     ram[silver.X] = 8
     s.observe()
     assert s.value() - on_road == pytest.approx(10 * town) and s.progress()["road_tile"] == 2
+
+
+def test_the_road_back_pays_a_little_after_each_step_but_only_once():
+    ram = _ram()
+    s = SilverStats(ram.__getitem__)
+    _visit(ram, s, (24, 3))  # Route 29, step 1
+    _visit(ram, s, (26, 3), (26, 1))  # Cherrygrove, Route 30: two steps later
+    before, value = s.progress(), s.value()
+    _visit(ram, s, (24, 3))  # back on the same Route 29 tile
+    after = s.progress()
+    assert after["road_tile"] == before["road_tile"] and after["retraced"] == before["retraced"] + 1
+    assert s.value() - value == pytest.approx(silver.WEIGHTS["retraced"]) and silver.WEIGHTS["retraced"] * 400 < 8
+    _visit(ram, s, (24, 3))
+    assert s.progress()["retraced"] == after["retraced"]  # the same tile in the same step never pays twice
 
 
 def test_path_steps_must_be_reached_in_order():
