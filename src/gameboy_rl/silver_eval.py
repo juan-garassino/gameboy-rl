@@ -19,26 +19,6 @@ VIDEO_FPS = 8  # one agent step = 0.4 s of game, so ~3x real speed
 VIDEO_SCALE = 4  # the screen is 160x144: players open that tiny
 
 
-class Chooser:
-    """Plays a model one game at a time; carries an LSTM's memory within a game and drops it between games."""
-
-    def __init__(self, model):
-        self.model = model
-        self.recurrent = hasattr(model.policy, "lstm_actor") if hasattr(model, "policy") else False
-        self.reset()
-
-    def reset(self) -> None:
-        self.memory, self.first = None, np.ones((1,), dtype=bool)
-
-    def __call__(self, obs: dict) -> int:
-        batch = {k: np.asarray(v)[None] for k, v in obs.items()}
-        if not self.recurrent:
-            return int(self.model.predict(batch, deterministic=False)[0][0])
-        action, self.memory = self.model.predict(batch, state=self.memory, episode_start=self.first, deterministic=False)
-        self.first = np.zeros((1,), dtype=bool)
-        return int(action[0])
-
-
 class SilverEvalCallback(BaseCallback):
     def __init__(self, cfg: Settings, run_dir: Path, heartbeat: Callable[[], None] | None = None,
                  env_factory: Callable[[Settings], object] = SilverEnv):
@@ -62,14 +42,15 @@ class SilverEvalCallback(BaseCallback):
             logger.info("baselines: %s", out)
         self.next_eval = self.model.num_timesteps + self.cfg.eval_freq
 
-    def _choose(self) -> "Chooser":
-        return Chooser(self.model)
+    def _choose(self, obs: dict) -> int:
+        batch = {k: np.asarray(v)[None] for k, v in obs.items()}
+        return int(self.model.predict(batch, deterministic=False)[0][0])
 
     def evaluate(self) -> dict[str, float]:
         steps, frames = self.model.num_timesteps, []
         env = self.env_factory(self.cfg)
         try:
-            stats = play_episodes(env, self.cfg.eval_steps, self.cfg.eval_episodes, self._choose(), self.heartbeat, frames)
+            stats = play_episodes(env, self.cfg.eval_steps, self.cfg.eval_episodes, self._choose, self.heartbeat, frames)
             areas = env.stats.areas()  # of the last game, in the order reached
         finally:
             env.close()

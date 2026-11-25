@@ -53,19 +53,8 @@ def _size_torch_threads(cfg: Settings) -> None:
         torch.set_num_threads(torch_threads(os.cpu_count() or 2, cfg.n_envs))
 
 
-def algorithm(cfg: Settings):
-    if cfg.memory == "lstm":
-        from sb3_contrib import RecurrentPPO
-
-        return RecurrentPPO
-    return PPO
-
-
 def build_model(cfg: Settings, env: VecEnv) -> PPO:
     _size_torch_threads(cfg)
-    if cfg.memory == "lstm":
-        return algorithm(cfg)("MultiInputLstmPolicy", env, n_steps=cfg.n_steps, seed=cfg.seed, device=cfg.device, verbose=0,
-                              policy_kwargs=dict(lstm_hidden_size=256, n_lstm_layers=1), **ppo_params(cfg))
     return PPO("MultiInputPolicy", env, n_steps=cfg.n_steps, seed=cfg.seed, device=cfg.device, verbose=0, **ppo_params(cfg))
 
 
@@ -74,8 +63,6 @@ def load_model(path: Path, cfg: Settings, env: VecEnv) -> PPO:
     """Load a checkpoint and re-size its rollout buffer to this run's n_steps/n_envs (as baseline_fast_v2 does).
 
     A checkpoint with fewer inputs than this run's game is grafted onto a fresh network (see graft.py)."""
-    if cfg.memory == "lstm":  # an LSTM run resumes only its own checkpoints: no rollout resizing, no grafting
-        return algorithm(cfg).load(path, env=env, device=cfg.device, custom_objects=SCHEDULE_OVERRIDES)
     if cfg.game == "silver":
         old = PPO.load(path, device=cfg.device, custom_objects=SCHEDULE_OVERRIDES)
         fresh = build_model(cfg, env)
