@@ -18,7 +18,7 @@ Container disk only (no network volume). Emulation is CPU-bound: vCPU count matt
 
 1. Exits (and removes itself) if `gs://…/gameboy-rl/runs/<RUN_ID>/DONE` exists.
 2. Pulls the run dir (resume from the run's newest checkpoint).
-3. No run checkpoint yet → pulls `init/$INIT_CKPT` (default `poke_26214400.zip`) and exports `GBRL_RESUME_FROM`.
+3. No run checkpoint yet → pulls `init/$INIT_CKPT` (default `poke_26214400.zip` for Red, none for Silver: RunPod drops empty env values) and exports `GBRL_RESUME_FROM`.
    Missing → `health.json` CRITICAL `init_ckpt`, pod removed (the ROM in GCS is untouched). `INIT_CKPT=` = fresh policy.
 4. Pulls `roms/pokemon_red_version.gb`, then **deletes every object under `gs://…/gameboy-rl/roms/`**, then checks
    the SHA-1 (`ea9bcae6…`). No ROM in GCS and none on disk, or a wrong hash → CRITICAL `rom`, pod removed.
