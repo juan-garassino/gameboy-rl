@@ -30,7 +30,7 @@ def test_doing_nothing_is_worth_nothing():
 
 @pytest.mark.parametrize("change,expected", [
     ({silver.JOHTO_BADGES: 1}, 50.0), ({silver.EVENTS_START: 0b111}, 2.0), ({silver.CAUGHT_START: 1}, 1.0),
-    ({silver.PARTY + silver.LEVEL: 6}, 0.5), ({silver.X: 7}, 0.01), ({silver.MAP_NUMBER: 5}, 0.11)])
+    ({silver.PARTY + silver.LEVEL: 6}, 0.5), ({silver.X: 7}, 0.005), ({silver.MAP_NUMBER: 5}, 0.105)])
 def test_progress_is_rewarded(change, expected):
     ram = _ram()
     s = SilverStats(ram.__getitem__)
@@ -68,6 +68,19 @@ def test_all_the_houses_in_town_pay_less_than_leaving_it():
     assert s.areas()[-1] == "Route 29"
 
 
+def test_walking_the_story_roads_pays_ten_times_walking_around_town():
+    ram = _ram()
+    s = SilverStats(ram.__getitem__)
+    ram[silver.X] = 7
+    s.observe()
+    town = s.value()
+    _visit(ram, s, (24, 3))
+    on_road = s.value()
+    ram[silver.X] = 8
+    s.observe()
+    assert s.value() - on_road == pytest.approx(10 * town) and s.progress()["road_tile"] == 2
+
+
 def test_path_steps_must_be_reached_in_order():
     ram = _ram()
     s = SilverStats(ram.__getitem__)
@@ -82,7 +95,7 @@ def test_toggling_and_backtracking_cannot_be_farmed():
         for flags, x in ((0b111, 7), (0b101, 6)):
             ram[silver.EVENTS_START], ram[silver.X] = flags, x
             s.observe()
-    assert s.value() == pytest.approx(2.0 + 0.01)
+    assert s.value() == pytest.approx(2.0 + 0.005)
 
 
 def test_battles_do_not_count_as_exploring():
@@ -114,7 +127,7 @@ def test_a_game_can_start_further_along_the_path():
     s = SilverStats(ram.__getitem__, path=2)
     assert s.value() == 0.0 and s.path == 2
     _visit(ram, s, silver.PATH[2][:2])
-    assert s.path == 3 and s.value() == pytest.approx(silver.PATH_REWARDS[2] + 0.11)
+    assert s.path == 3 and s.value() == pytest.approx(silver.PATH_REWARDS[2] + 0.15)
 
 
 class _Boy:
