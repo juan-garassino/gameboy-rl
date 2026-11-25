@@ -54,13 +54,13 @@ def _size_torch_threads(cfg: Settings) -> None:
 
 def build_model(cfg: Settings, env: VecEnv) -> PPO:
     _size_torch_threads(cfg)
-    return PPO("MultiInputPolicy", env, n_steps=cfg.n_steps, seed=cfg.seed, verbose=0, **ppo_params(cfg))
+    return PPO("MultiInputPolicy", env, n_steps=cfg.n_steps, seed=cfg.seed, device=cfg.device, verbose=0, **ppo_params(cfg))
 
 
 def load_model(path: Path, cfg: Settings, env: VecEnv) -> PPO:
     _size_torch_threads(cfg)
     """Load a checkpoint and re-size its rollout buffer to this run's n_steps/n_envs (as baseline_fast_v2 does)."""
-    model = PPO.load(path, env=env, custom_objects=SCHEDULE_OVERRIDES)
+    model = PPO.load(path, env=env, device=cfg.device, custom_objects=SCHEDULE_OVERRIDES)
     model.n_steps = cfg.n_steps
     model.n_envs = cfg.n_envs
     model.rollout_buffer.buffer_size = cfg.n_steps
