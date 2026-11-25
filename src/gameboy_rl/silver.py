@@ -75,6 +75,17 @@ class SilverStats:
         return hp / full if full else 0.0
 
 
+class StallClock:
+    """Ends an episode that stopped making progress: a stuck game teaches nothing and fills the batch."""
+
+    def __init__(self, limit: int):
+        self.limit, self.dry = limit, 0
+
+    def update(self, progressed: bool) -> bool:
+        self.dry = 0 if progressed else self.dry + 1
+        return self.dry >= self.limit
+
+
 class SilverEnv(gym.Env):
     metadata = {"render_modes": ["rgb_array"]}
 
@@ -109,6 +120,7 @@ class SilverEnv(gym.Env):
         self.pyboy.tick(1 + int(self.np_random.integers(0, 60)), True)  # vary the RNG so envs are not clones
         self.stats = SilverStats(self._read)
         self.value, self.steps = 0.0, 0
+        self.stall = StallClock(self.cfg.stall_steps)
         self.screens = np.zeros((72, 80, 3 * FRAME_STACK), np.uint8)
         self.recent = np.zeros(FRAME_STACK, np.int64)
         return self._obs(), {}
@@ -133,7 +145,7 @@ class SilverEnv(gym.Env):
         self.steps += 1
         new = self.stats.value()
         reward, self.value = new - self.value, new
-        return self._obs(), float(reward), False, self.steps >= self.cfg.ep_length, {"progress": self.stats.progress()}
+        return self._obs(), float(reward), self.stall.update(reward > 0), self.steps >= self.cfg.ep_length, {"progress": self.stats.progress()}
 
     def _obs(self) -> dict:
         self.screens = np.roll(self.screens, 3, axis=2)

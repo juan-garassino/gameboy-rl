@@ -29,8 +29,13 @@ logger = logging.getLogger(__name__)
 # baseline_fast_v2.py: PPO("MultiInputPolicy", env, n_steps=ep_length // 64, batch_size=512, n_epochs=1,
 #                          gamma=0.997, ent_coef=0.01); learning_rate / clip_range are SB3's defaults.
 LEARNING_RATE, CLIP_RANGE = 3e-4, 0.2
-PPO_PARAMS = dict(batch_size=512, n_epochs=1, gamma=0.997, ent_coef=0.01, learning_rate=LEARNING_RATE,
-                  clip_range=CLIP_RANGE)
+PPO_PARAMS = dict(batch_size=512, n_epochs=1, gamma=0.997, learning_rate=LEARNING_RATE, clip_range=CLIP_RANGE)
+
+
+def ppo_params(cfg: Settings) -> dict:
+    return {**PPO_PARAMS, "ent_coef": cfg.ent_coef}
+
+
 # Checkpoints carry cloudpickled schedule lambdas; PWhiddy's (Python 3.11 bytecode) segfault when called on 3.12.
 # Floats here make SB3 rebuild them (_setup_model -> get_schedule_fn).
 SCHEDULE_OVERRIDES = {"learning_rate": LEARNING_RATE, "lr_schedule": LEARNING_RATE, "clip_range": CLIP_RANGE}
@@ -49,7 +54,7 @@ def _size_torch_threads(cfg: Settings) -> None:
 
 def build_model(cfg: Settings, env: VecEnv) -> PPO:
     _size_torch_threads(cfg)
-    return PPO("MultiInputPolicy", env, n_steps=cfg.n_steps, seed=cfg.seed, verbose=0, **PPO_PARAMS)
+    return PPO("MultiInputPolicy", env, n_steps=cfg.n_steps, seed=cfg.seed, verbose=0, **ppo_params(cfg))
 
 
 def load_model(path: Path, cfg: Settings, env: VecEnv) -> PPO:
