@@ -89,13 +89,36 @@ def test_the_road_back_pays_a_little_after_each_step_but_only_once():
     s = SilverStats(ram.__getitem__)
     _visit(ram, s, (24, 3))  # Route 29, step 1
     _visit(ram, s, (26, 3), (26, 1))  # Cherrygrove, Route 30: two steps later
-    before, value = s.progress(), s.value()
+    before, value = s.progress(), s.base_value()
     _visit(ram, s, (24, 3))  # back on the same Route 29 tile
     after = s.progress()
     assert after["road_tile"] == before["road_tile"] and after["retraced"] == before["retraced"] + 1
-    assert s.value() - value == pytest.approx(silver.WEIGHTS["retraced"]) and silver.WEIGHTS["retraced"] * 400 < 8
+    assert s.base_value() - value == pytest.approx(silver.WEIGHTS["retraced"]) and silver.WEIGHTS["retraced"] * 400 < 8
     _visit(ram, s, (24, 3))
     assert s.progress()["retraced"] == after["retraced"]  # the same tile in the same step never pays twice
+
+
+def test_the_compass_pays_for_getting_closer_and_takes_it_back():
+    ram = _ram()
+    s = SilverStats(ram.__getitem__)
+    start = s.shaping
+    _visit(ram, s, (24, 3))  # Route 29: step 1 reached, so the goal becomes Cherrygrove
+    at_29 = s.shaping
+    _visit(ram, s, (24, 4))  # walks back home
+    home = s.shaping
+    _visit(ram, s, (24, 3), (24, 4), (24, 3))  # and wanders to and fro
+    assert home < at_29 and s.shaping == pytest.approx(at_29)  # loops cancel: nothing to farm
+    assert s.progress()["path"] == 1 and start == 0
+
+
+def test_the_compass_points_home_with_the_egg_and_never_counts_as_progress():
+    ram = _ram()
+    s = SilverStats(ram.__getitem__)
+    _visit(ram, s, *[(g, n) for g, n, _ in silver.PATH[:4]])  # up to Mr. Pokemon's house: now Elm is the goal
+    base = s.value() - s.shaping
+    _visit(ram, s, (26, 1))  # Route 30, one map back toward home
+    assert s.value() - s.shaping == pytest.approx(base + 0.0, abs=0.06)  # no path pay for that, only a little retracing
+    assert s.shaping > 0 and s.base_value() == pytest.approx(s.value() - s.shaping)
 
 
 def test_path_steps_must_be_reached_in_order():

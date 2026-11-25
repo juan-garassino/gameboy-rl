@@ -32,6 +32,9 @@ PATH: list[tuple[int, int, str]] = [
     (24, 3, "Route 29"), (26, 3, "Cherrygrove City"), (26, 1, "Route 30"), (26, 10, "Mr. Pokemon's house"),
     (24, 5, "Elm's lab (egg)"), (26, 2, "Route 31"), (10, 5, "Violet City"), (10, 7, "Violet Gym"),
 ]
+# Where each map lies along the road, so a compass can say how far the next goal is (interiors not listed keep the last).
+ROAD_ORDER = {(24, 4): 0, (24, 5): 0, (24, 3): 1, (26, 3): 2, (26, 1): 3, (26, 10): 4, (26, 2): 4, (10, 5): 5, (10, 7): 6}
+COMPASS = 1.0  # paid per map closer to the next goal, taken back per map farther: it cancels over any loop
 _ROADS = {(g, n) for g, n, name in PATH if name.startswith("Route") or name.endswith("City")}  # not interiors
 PATH_REWARDS = [3.0 + i for i in range(len(PATH))]
 AREAS: dict[tuple[int, int], str] = {
@@ -58,6 +61,8 @@ class SilverStats:
         self.maps: dict[tuple[int, int], None] = {}  # an ordered set: the order areas were reached in
         self.path = path
         self.road_tiles = 0  # new tiles on the PATH maps
+        self.shaping = 0.0  # the compass: summed since the start, changes with the map, never counts as progress
+        self._near: float | None = None
         self.retraced = 0  # old PATH tiles walked again after a later step of the path (each once per step)
         self.road_seen: set[tuple[int, int, int, int, int]] = set()
         self.base = self._raw()
@@ -91,6 +96,17 @@ class SilverStats:
                 else:
                     self.road_tiles += 1
             self.tiles.add(tile)
+            self._compass()
+
+    def _compass(self) -> None:
+        here = ROAD_ORDER.get((self.read(MAP_GROUP), self.read(MAP_NUMBER)))
+        if here is None or self.path >= len(PATH):
+            return
+        goal = ROAD_ORDER[PATH[self.path][:2]]
+        near = -abs(goal - here)
+        if self._near is not None and self._goal == goal:
+            self.shaping += COMPASS * (near - self._near)
+        self._near, self._goal = near, goal
 
     def progress(self) -> dict[str, int]:
         gained = {k: self.best[k] - self.base[k] for k in self.base}
@@ -98,6 +114,9 @@ class SilverStats:
                 "road_tile": self.road_tiles - self.start_road_tiles, "retraced": self.retraced, "path": self.path}
 
     def value(self) -> float:
+        return self.base_value() + self.shaping
+
+    def base_value(self) -> float:
         p = self.progress()
         return sum(w * p[k] for k, w in WEIGHTS.items()) + sum(PATH_REWARDS[self.start_path:self.path])
 
@@ -200,7 +219,7 @@ class SilverEnv(gym.Env):
                 self.pyboy.load_state(f)
         self.pyboy.tick(1 + int(self.np_random.integers(0, 60)), True)  # vary the RNG so envs are not clones
         self.stats = SilverStats(self._read, path=further[1] if further else 0)
-        self.value, self.steps = 0.0, 0
+        self.value, self.base, self.steps = 0.0, 0.0, 0
         self.stall = StallClock(self.cfg.stall_steps)
         self.screens = np.zeros((72, 80, 3 * FRAME_STACK), np.uint8)
         self.recent = np.zeros(FRAME_STACK, np.int64)
@@ -227,7 +246,9 @@ class SilverEnv(gym.Env):
         self.steps += 1
         new = self.stats.value()
         reward, self.value = new - self.value, new
-        return self._obs(), float(reward), self.stall.update(reward > 0, patience=1 + self.stats.path), self.steps >= self.cfg.ep_length, {"progress": self.stats.progress()}
+        base = self.stats.base_value()
+        advanced, self.base = base > self.base, base  # the compass must not keep a stuck game alive
+        return self._obs(), float(reward), self.stall.update(advanced, patience=1 + self.stats.path), self.steps >= self.cfg.ep_length, {"progress": self.stats.progress()}
 
     def _obs(self) -> dict:
         self.screens = np.roll(self.screens, 3, axis=2)
