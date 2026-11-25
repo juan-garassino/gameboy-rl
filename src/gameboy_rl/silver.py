@@ -334,6 +334,8 @@ def play_episode(env, steps: int, choose: Callable[[dict], int | None], heartbea
                  frames: list | None = None) -> dict[str, float]:
     """Play `steps` agent steps; choose() returns an action, or None to press nothing."""
     obs, _ = env.reset()
+    if hasattr(choose, "reset"):
+        choose.reset()  # a network with memory starts each game with an empty one
     total, info = 0.0, {"progress": env.stats.progress()}
     for _ in range(steps):
         if heartbeat is not None:

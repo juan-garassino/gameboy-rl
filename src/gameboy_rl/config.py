@@ -40,6 +40,7 @@ class Settings(BaseSettings):
     stall_steps: int = 1024  # GBRL_STALL_STEPS=1024 (silver: dry steps that end a game, × (1 + path steps reached))
     frontier_prob: float = 0.5  # GBRL_FRONTIER_PROB=0.5 (silver: share of games starting at the furthest point reached)
     n_epochs: int = 1  # GBRL_N_EPOCHS=3 (silver: with 1 pass per batch it stayed near-random, entropy 1.65-1.75 of 1.79)
+    memory: Literal["none", "lstm"] = "none"  # GBRL_MEMORY=lstm (silver: a recurrent network, from scratch, via sb3-contrib)
     ent_coef: float = 0.01  # GBRL_ENT_COEF=0.01 (0.02 kept Silver near-random; StallClock now handles being stuck)
     eval_freq: int = 500_000  # GBRL_EVAL_FREQ=500000 (silver: color video + outcome stats)
     eval_steps: int = 4096  # GBRL_EVAL_STEPS=4096 (agent steps per eval/baseline game at most, ~27 min; a stalled game ends)
