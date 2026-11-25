@@ -23,13 +23,14 @@ PARTY_COUNT, PARTY, MON_SIZE, LEVEL, HP, MAX_HP = 0xDA22, 0xDA2A, 0x30, 0x1F, 0x
 BUTTONS = ["down", "left", "right", "up", "a", "b"]  # no START: menus and saving are not progress
 ACTION_FRAMES, PRESS_FRAMES = 24, 8
 FRAME_STACK = 3
-WEIGHTS = {"badge": 50.0, "event": 2.0, "map": 0.1, "caught": 1.0, "level": 0.5, "tile": 0.01}
+WEIGHTS = {"badge": 50.0, "event": 2.0, "map": 0.1, "caught": 1.0, "level": 0.5, "tile": 0.005, "road_tile": 0.045}  # road_tile adds to tile
 
 # The story's road to the first badge, from pret/pokegold's map_constants.asm. Each step pays more than the last.
 PATH: list[tuple[int, int, str]] = [
     (24, 3, "Route 29"), (26, 3, "Cherrygrove City"), (26, 1, "Route 30"), (26, 10, "Mr. Pokemon's house"),
     (24, 5, "Elm's lab (egg)"), (26, 2, "Route 31"), (10, 5, "Violet City"), (10, 7, "Violet Gym"),
 ]
+_ROADS = {(g, n) for g, n, name in PATH if name.startswith("Route") or name.endswith("City")}  # not interiors
 PATH_REWARDS = [3.0 + i for i in range(len(PATH))]
 AREAS: dict[tuple[int, int], str] = {
     (24, 4): "New Bark Town", (24, 5): "Elm's lab", (24, 6): "player's house 1F", (24, 7): "player's house 2F",
@@ -54,10 +55,12 @@ class SilverStats:
         self.tiles: set[tuple[int, int, int, int]] = set()
         self.maps: dict[tuple[int, int], None] = {}  # an ordered set: the order areas were reached in
         self.path = path
+        self.road_tiles = 0  # new tiles on the PATH maps
         self.base = self._raw()
         self.best = dict(self.base)
         self.observe()
         self.start_tiles, self.start_maps = len(self.tiles), len(self.maps)
+        self.start_road_tiles = self.road_tiles
 
     def _raw(self) -> dict[str, int]:
         r = self.read
@@ -74,12 +77,15 @@ class SilverStats:
             self.maps[m] = None
             if self.path < len(PATH) and m == PATH[self.path][:2]:
                 self.path += 1
-            self.tiles.add((*m, self.read(X), self.read(Y)))
+            tile = (*m, self.read(X), self.read(Y))
+            if tile not in self.tiles and m in _ROADS:
+                self.road_tiles += 1
+            self.tiles.add(tile)
 
     def progress(self) -> dict[str, int]:
         gained = {k: self.best[k] - self.base[k] for k in self.base}
         return {**gained, "map": len(self.maps) - self.start_maps, "tile": len(self.tiles) - self.start_tiles,
-                "path": self.path}
+                "road_tile": self.road_tiles - self.start_road_tiles, "path": self.path}
 
     def value(self) -> float:
         p = self.progress()
