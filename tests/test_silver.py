@@ -319,7 +319,7 @@ def test_the_goal_already_reached_does_not_hide_the_way_to_it():
     assert set(f.states) == {(4, 0), (4, 5)}
 
 
-def test_practice_starts_are_half_the_furthest_point_and_half_anywhere_on_the_way():
+def test_every_path_step_gets_the_same_share_of_practice():
     f = silver.Frontier()
     assert f.pick(np.random.default_rng(0), prob=1.0) is None  # nothing reached yet: normal start
     f.reached(_Boy(), 0, 3)  # home is the normal start
@@ -330,7 +330,7 @@ def test_practice_starts_are_half_the_furthest_point_and_half_anywhere_on_the_wa
     f.reached(None, 4, 5)  # known already
     rng = np.random.default_rng(0)
     paths = [f.pick(rng, prob=1.0)[1] for _ in range(400)]
-    assert 0.08 < paths.count(2) / 400 < 0.18  # 1 of 4 points, half the time
+    assert 0.42 < paths.count(2) / 400 < 0.58  # one point against three, but one step against one
     assert f.pick(rng, prob=0.0) is None
 
 

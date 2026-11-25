@@ -221,8 +221,8 @@ class StallClock:
 class Frontier:
     """Points along the story any game has reached, so some games practise there instead of at home.
 
-    One state per (path step, maps left to the goal): the first game to be there. Half the practice
-    starts are the furthest point, half any of them, so the way between two steps is practised too. With a directory, all
+    One state per (path step, maps left to the goal): the first game to be there. Every path step gets
+    the same share of practice, so the early road is not forgotten. With a directory, all
     processes share the points.
     """
 
@@ -257,8 +257,10 @@ class Frontier:
             self._sync()
         if not self.states or rng.random() >= prob:
             return None
-        keys = sorted(self.states, key=lambda k: (k[0], -k[1]))
-        key = keys[-1] if rng.random() < 0.5 else keys[int(rng.integers(len(keys)))]
+        steps = sorted({p for p, _ in self.states})
+        step = steps[int(rng.integers(len(steps)))]
+        keys = sorted(k for k in self.states if k[0] == step)
+        key = keys[int(rng.integers(len(keys)))]
         return io.BytesIO(self.states[key]), key[0]
 
 
@@ -337,7 +339,7 @@ class SilverEnv(gym.Env):
         reward, self.value = new - self.value, new
         base = self.stats.base_value()
         advanced, self.base = base > self.base, base  # the compass must not keep a stuck game alive
-        return self._obs(), float(reward), self.stall.update(advanced, patience=1 + self.stats.path), self.steps >= self.cfg.ep_length, {"progress": self.stats.progress()}
+        return self._obs(), float(reward), self.stall.update(advanced, patience=1 + self.stats.path - self.stats.start_path), self.steps >= self.cfg.ep_length, {"progress": self.stats.progress()}
 
     def _obs(self) -> dict:
         self.screens = np.roll(self.screens, 3, axis=2)
