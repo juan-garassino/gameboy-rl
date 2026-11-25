@@ -49,16 +49,19 @@ def test_the_story_path_pays_more_the_further_it_gets():
     ram = _ram()
     s = SilverStats(ram.__getitem__)
     gains, last = [], 0.0
-    for group, number, _ in silver.PATH:
+    for k, (group, number, _) in enumerate(silver.PATH):
+        if k in silver.NEEDS_FLAG:
+            _story_flag(ram, silver.NEEDS_FLAG[k])
         _visit(ram, s, (group, number))
-        gains.append(s.value() - last)
-        last = s.value()
+        now = s.value() - s.story  # the egg flags pay on top of the steps
+        gains.append(now - last)
+        last = now
     assert s.progress()["path"] == len(silver.PATH) and gains == sorted(gains) and gains[0] >= 2.0
     _visit(ram, s, *[(g, n) for g, n, _ in silver.PATH], (24, 4))
-    walked_back = s.value()
+    walked_back = s.value() - s.story
     assert walked_back - last <= silver.WEIGHTS["retraced"] * len(silver.PATH)  # a little, once
     _visit(ram, s, *[(g, n) for g, n, _ in silver.PATH], (24, 4))
-    assert s.value() == pytest.approx(walked_back)  # and then nothing
+    assert s.value() - s.story == pytest.approx(walked_back)  # and then nothing
 
 
 def test_all_the_houses_in_town_pay_less_than_leaving_it():
@@ -114,11 +117,13 @@ def test_the_compass_pays_for_getting_closer_and_takes_it_back():
 def test_the_compass_points_home_with_the_egg_and_never_counts_as_progress():
     ram = _ram()
     s = SilverStats(ram.__getitem__)
-    _visit(ram, s, *[(g, n) for g, n, _ in silver.PATH[:4]])  # up to Mr. Pokemon's house: now Elm is the goal
+    _visit(ram, s, *[(g, n) for g, n, _ in silver.PATH[:3]])
+    _story_flag(ram, 30)
+    _visit(ram, s, silver.PATH[3][:2])  # up to Mr. Pokemon's house: now Elm is the goal
     base = s.value() - s.shaping
     _visit(ram, s, (26, 1))  # Route 30, one map back toward home
     assert s.value() - s.shaping == pytest.approx(base + 0.0, abs=0.06)  # no path pay for that, only a little retracing
-    assert s.shaping > 0 and s.base_value() == pytest.approx(s.value() - s.shaping)
+    assert s.path == 4 and s.shaping > 0 and s.base_value() == pytest.approx(s.value() - s.shaping)
 
 
 def _story_flag(ram, i):
@@ -216,6 +221,29 @@ def test_a_game_that_got_further_is_given_more_time():
     assert [clock.update(False, patience=2) for _ in range(6)] == [False, False, False, False, False, True]
 
 
+def test_the_egg_steps_count_only_when_the_game_says_so():
+    ram = _ram()
+    s = SilverStats(ram.__getitem__)
+    _visit(ram, s, *[(g, n) for g, n, _ in silver.PATH[:4]])  # inside Mr. Pokemon's house, no egg yet
+    assert s.path == 3 and s.away == 0
+    _story_flag(ram, 30)
+    s.observe()
+    assert s.path == 4  # got the egg: now Elm
+    with_egg = s.shaping
+    _visit(ram, s, (26, 1), (26, 3), (24, 3), (24, 4))
+    assert s.away == 1 and s.shaping > with_egg
+    town = s.shaping
+    _visit(ram, s, (24, 5))  # inside the lab, egg not given: still the goal, and a step closer
+    assert s.path == 4 and s.away == 0 and s.shaping == pytest.approx(town + silver.COMPASS)
+    _visit(ram, s, (24, 4))
+    assert s.path == 4 and s.shaping == pytest.approx(town)  # walking out again gives it back
+    _visit(ram, s, (24, 5))
+    before = s.base_value()
+    _story_flag(ram, 31)
+    s.observe()
+    assert s.path == 5 and s.base_value() - before == pytest.approx(silver.PATH_REWARDS[4] + silver.STORY_PAY[31])
+
+
 def test_the_path_goes_back_to_elm_with_the_egg():
     names = [name for _, _, name in silver.PATH]
     assert names.index("Mr. Pokemon's house") + 1 == names.index("Elm's lab (egg)") < names.index("Route 31")
@@ -234,30 +262,35 @@ class _Boy:
         f.write(b"cherrygrove")
 
 
-def test_processes_share_the_furthest_point_any_of_them_reached(tmp_path):
+def test_processes_share_the_points_any_of_them_reached(tmp_path):
     a, b = silver.Frontier(tmp_path), silver.Frontier(tmp_path)
-    rng = np.random.default_rng(0)
-    a.reached(_Boy(), 3)
-    state, path = b.pick(rng, prob=1.0)
+    a.reached(_Boy(), 3, 2)
+    state, path = b.pick(np.random.default_rng(0), prob=1.0)
     assert state.read() == b"cherrygrove" and path == 3
-    b.reached(_Boy(), 2)  # behind the shared point: nothing to save
-    assert [p.name for p in tmp_path.iterdir()] == ["path_03.state"]
+    b.reached(None, 3, 2)  # no closer than the shared point: the emulator is not even asked
+    b.reached(_Boy(), 3, 1)
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["path_03_away_01.state", "path_03_away_02.state"]
 
 
-def test_the_shared_point_is_not_written_by_games_that_may_not_start_there(tmp_path):
+def test_the_shared_points_are_not_written_by_games_that_may_not_start_there(tmp_path):
     f = silver.Frontier(tmp_path, share=False)
-    f.reached(_Boy(), 2)
+    f.reached(_Boy(), 2, 1)
     assert not list(tmp_path.iterdir())
 
 
-def test_frontier_remembers_the_furthest_point_and_replays_it():
+def test_practice_starts_are_half_the_furthest_point_and_half_anywhere_on_the_way():
     f = silver.Frontier()
     assert f.pick(np.random.default_rng(0), prob=1.0) is None  # nothing reached yet: normal start
-    f.reached(_Boy(), 2)
-    f.reached(None, 1)  # not further: ignored, the emulator is not even asked
-    state, path = f.pick(np.random.default_rng(0), prob=1.0)
-    assert state.read() == b"cherrygrove" and path == 2
-    assert f.pick(np.random.default_rng(0), prob=0.0) is None
+    f.reached(_Boy(), 0, 3)  # home is the normal start
+    f.reached(_Boy(), 2, None)  # no idea how far: skip
+    assert not f.states
+    for path, away in ((2, 2), (4, 5), (4, 4), (4, 3)):
+        f.reached(_Boy(), path, away)
+    f.reached(None, 4, 5)  # walked back: not closer
+    rng = np.random.default_rng(0)
+    paths = [f.pick(rng, prob=1.0)[1] for _ in range(400)]
+    assert 0.08 < paths.count(2) / 400 < 0.18  # 1 of 4 points, half the time
+    assert f.pick(rng, prob=0.0) is None
 
 
 def test_stall_limit_and_entropy_bonus_are_settings():

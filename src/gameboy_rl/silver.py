@@ -27,7 +27,7 @@ BUTTONS = ["down", "left", "right", "up", "a", "b"]  # no START: menus and savin
 ACTION_FRAMES, PRESS_FRAMES = 24, 8
 FRAME_STACK = 3
 # Story flags that mean real progress (numbers: achievements.STORY), in points. Other flags pay nothing.
-STORY_PAY = {30: 5.0, 31: 5.0, **{i: 30.0 for i in range(1213, 1221)}}
+STORY_PAY = {30: 5.0, 31: 15.0, **{i: 30.0 for i in range(1213, 1221)}}
 HEAL_PAY, HEAL_MAX = 0.5, 3.0  # per full party restored outside battle, at most this much per game
 WEIGHTS = {"badge": 50.0, "story": 1.0, "healed": 1.0, "map": 0.1, "caught": 1.0, "level": 2.0, "exp": 0.03, "tile": 0.005, "road_tile": 0.045, "retraced": 0.01}  # road_tile adds to tile
 
@@ -36,6 +36,8 @@ PATH: list[tuple[int, int, str]] = [
     (24, 3, "Route 29"), (26, 3, "Cherrygrove City"), (26, 1, "Route 30"), (26, 10, "Mr. Pokemon's house"),
     (24, 5, "Elm's lab (egg)"), (26, 2, "Route 31"), (10, 5, "Violet City"), (10, 7, "Violet Gym"),
 ]
+# Steps that are done only when the game's own flag says so (being in the room is not enough): the egg got, the egg given.
+NEEDS_FLAG = {3: 30, 4: 31}
 # Where each map lies along the road, so a compass can say how far the next goal is (interiors not listed keep the last).
 ROAD_ORDER = {(24, 4): 0, (24, 5): 0, (24, 3): 1, (26, 3): 2, (26, 1): 3, (26, 10): 4, (26, 2): 4, (10, 5): 5, (10, 7): 6}
 COMPASS = 1.0  # paid per map closer to the next goal, taken back per map farther: it cancels over any loop
@@ -109,7 +111,7 @@ class SilverStats:
         if self.read(BATTLE_MODE) == 0:
             m = (self.read(MAP_GROUP), self.read(MAP_NUMBER))
             self.maps[m] = None
-            if self.path < len(PATH) and m == PATH[self.path][:2]:
+            if self.path < len(PATH) and m == PATH[self.path][:2] and self._flag_done(NEEDS_FLAG.get(self.path)):
                 self.path += 1
             tile = (*m, self.read(X), self.read(Y))
             if m in _ROADS and (self.path, *tile) not in self.road_seen:
@@ -121,13 +123,22 @@ class SilverStats:
             self.tiles.add(tile)
             self._compass()
 
+    def _flag_done(self, i: int | None) -> bool:
+        return i is None or bool(self.read(EVENTS_START + i // 8) >> (i % 8) & 1)
+
+    @property
+    def away(self) -> int | None:
+        """Maps to the next goal, plus one until the goal's own map is entered (None: not known yet)."""
+        return None if self._near is None else int(-self._near)
+
     def _compass(self) -> None:
         here = ROAD_ORDER.get((self.read(MAP_GROUP), self.read(MAP_NUMBER)))
         if here is None or self.path >= len(PATH):
             return
         self._here = here
         goal = ROAD_ORDER[PATH[self.path][:2]]
-        near = -abs(goal - here)
+        in_goal = (self.read(MAP_GROUP), self.read(MAP_NUMBER)) == PATH[self.path][:2]
+        near = -(abs(goal - here) + (not in_goal))
         if self._near is not None and self._goal == goal:
             self.shaping += COMPASS * (near - self._near)
         self._near, self._goal = near, goal
@@ -168,40 +179,50 @@ class StallClock:
 
 
 class Frontier:
-    """The furthest point on the path any game has reached, so some games practise there instead of at home.
+    """Points along the story any game has reached, so some games practise there instead of at home.
 
-    With a directory, all processes share it: one lucky game moves everyone's starting point forward.
+    One state per (path step, maps left to the goal), saved only when a game gets closer than any before. Half the practice
+    starts are the furthest point, half any of them, so the way between two steps is practised too. With a directory, all
+    processes share the points.
     """
 
     def __init__(self, directory: Path | None = None, share: bool = True):
         self.directory = directory if share else None
-        self.state: bytes | None = None
-        self.path = 0
+        self.states: dict[tuple[int, int], bytes] = {}  # (path, away) -> game state
 
     def _sync(self) -> None:
         if self.directory is None or not self.directory.is_dir():
             return
-        found = sorted(self.directory.glob("path_*.state"))
-        if found and (path := int(found[-1].stem.split("_")[1])) > self.path:
-            self.state, self.path = found[-1].read_bytes(), path
+        for f in self.directory.glob("path_*_away_*.state"):
+            _, path, _, away = f.stem.split("_")
+            if (key := (int(path), int(away))) not in self.states:
+                self.states[key] = f.read_bytes()
 
-    def reached(self, pyboy, path: int) -> None:
-        if path > self.path:
-            buf = io.BytesIO()
-            pyboy.save_state(buf)
-            self.state, self.path = buf.getvalue(), path
-            if self.directory is not None:
-                self.directory.mkdir(parents=True, exist_ok=True)
-                tmp = self.directory / f".path_{path:02d}.{os.getpid()}.tmp"
-                tmp.write_bytes(self.state)
-                tmp.replace(self.directory / f"path_{path:02d}.state")  # atomic: readers never see half a state
+    def _closest(self, path: int) -> int:
+        return min((a for p, a in self.states if p == path), default=99)
+
+    def reached(self, pyboy, path: int, away: int | None) -> None:
+        if path == 0 or away is None or away >= self._closest(path):
+            return
+        buf = io.BytesIO()
+        pyboy.save_state(buf)
+        self.states[(path, away)] = buf.getvalue()
+        if self.directory is not None:
+            self.directory.mkdir(parents=True, exist_ok=True)
+            target = self.directory / f"path_{path:02d}_away_{away:02d}.state"
+            if not target.exists():
+                tmp = self.directory / f".{target.stem}.{os.getpid()}.tmp"
+                tmp.write_bytes(buf.getvalue())
+                tmp.replace(target)  # atomic: readers never see half a state
 
     def pick(self, rng: np.random.Generator, prob: float) -> tuple[io.BytesIO, int] | None:
         if prob > 0:
             self._sync()
-        if self.state is None or rng.random() >= prob:
+        if not self.states or rng.random() >= prob:
             return None
-        return io.BytesIO(self.state), self.path
+        keys = sorted(self.states, key=lambda k: (k[0], -k[1]))
+        key = keys[-1] if rng.random() < 0.5 else keys[int(rng.integers(len(keys)))]
+        return io.BytesIO(self.states[key]), key[0]
 
 
 N_STORY = len(STORY) + len(BADGES) + len(PATH) + 1 + 1  # flags, badges, goal one-hot (with "done"), closeness
@@ -269,7 +290,7 @@ class SilverEnv(gym.Env):
         self.pyboy.tick(frames - 1, False)
         self.pyboy.tick(1, True)
         self.stats.observe()
-        self.frontier.reached(self.pyboy, self.stats.path)
+        self.frontier.reached(self.pyboy, self.stats.path, self.stats.away)
         if self.cfg.frontier_prob > 0:  # training games only: evals are scored separately
             self.log.update(self.stats.path, self.steps)
         self.recent = np.roll(self.recent, 1)
