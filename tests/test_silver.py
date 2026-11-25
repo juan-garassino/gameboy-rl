@@ -29,7 +29,7 @@ def test_doing_nothing_is_worth_nothing():
 
 
 @pytest.mark.parametrize("change,expected", [
-    ({silver.JOHTO_BADGES: 1}, 20.0), ({silver.EVENTS_START: 0b111}, 2.0), ({silver.CAUGHT_START: 1}, 1.0),
+    ({silver.JOHTO_BADGES: 1}, 50.0), ({silver.EVENTS_START: 0b111}, 2.0), ({silver.CAUGHT_START: 1}, 1.0),
     ({silver.PARTY + silver.LEVEL: 6}, 0.5), ({silver.X: 7}, 0.01), ({silver.MAP_NUMBER: 5}, 0.11)])
 def test_progress_is_rewarded(change, expected):
     ram = _ram()
