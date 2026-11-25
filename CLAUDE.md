@@ -17,7 +17,7 @@ Template for all monitoring + RunPod plumbing: `../RL-sega-rl` (keep the two cop
 | `train.py` | `run()`: baseline_fast_v2 PPO params, resume (run ckpt > `GBRL_RESUME_FROM`), checkpoints → MLflow, health, budget, PWhiddy's `TensorboardCallback`, any crash → CRITICAL, DONE in `finally` |
 | `check_start.py` | `text_box_visible(frame)` heuristic, `run()` → `runs/check_start{,_first}.png` |
 | `status.py` | `gameboy-rl status <run>`: live state from MLflow |
-| `silver.py` | Pokémon Silver in color: `SilverEnv`, `SilverStats` (RAM from pret symbols, high-water marks so doing nothing earns 0), `PATH` (story road to the first badge, each step pays more), `areas` observation, `StallClock`, baselines |
+| `silver.py` | Pokémon Silver in color: `SilverEnv`, `SilverStats` (RAM from pret symbols, high-water marks so doing nothing earns 0), `PATH` (story road to the first badge, each step pays more), `areas` observation, `StallClock` (more patience further along), `Frontier` (half the games start at the furthest point reached; evals never do), baselines |
 | `silver_eval.py` | `SilverEvalCallback`: baselines first (refuses to train if doing nothing pays), then color video + outcome stats |
 | `play.py` | `gameboy-rl play --model X --video out.mp4`: local headless replay of a checkpoint (the trainer records no eval videos) |
 | `cli.py` | `gameboy-rl train|smoke|check-start|status` (argparse) |
