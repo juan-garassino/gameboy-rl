@@ -69,7 +69,7 @@ def start(cfg: Settings, probe: Path | None = None) -> bool:
                            ARTIFACT_LOCATION)
         mlflow.set_experiment(EXPERIMENT)
         mlflow.start_run(run_name=cfg.run_id)
-        mlflow.set_tag("game", "pokemon-red")
+        mlflow.set_tag("game", f"pokemon-{cfg.game}")
         mlflow.log_params({k: str(v) for k, v in cfg.model_dump().items()})
         if probe is not None:
             mlflow.log_artifact(str(probe))

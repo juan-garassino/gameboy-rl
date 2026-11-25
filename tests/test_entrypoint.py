@@ -222,6 +222,13 @@ def test_silver_pulls_its_rom_and_start_state_then_deletes_both(tmp_path):
     assert _trainer_line(calls) is not None and "init/" not in calls
 
 
+def test_silver_never_starts_from_reds_checkpoint(tmp_path):
+    """RunPod drops empty env values, so the launcher's INIT_CKPT="" reaches the pod as unset (silver-claude-1)."""
+    rc, calls, _ = _run(tmp_path, GBRL_GAME="silver")
+    assert rc == 0 and "init/" not in calls
+    assert _trainer_line(calls).endswith("resume=")
+
+
 def test_red_never_asks_for_a_start_state(tmp_path):
     _, calls, _ = _run(tmp_path)
     assert "claude_totodile" not in calls and "pokemon_red_version.gb" in calls

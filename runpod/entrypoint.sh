@@ -14,7 +14,7 @@
 #
 # Required env: RUN_ID, GCS_BUCKET; GCS_ACCESS_TOKEN (short-lived, 1 h — after that only MLflow works).
 # Every gcloud storage call is capped by GCS_TIMEOUT (300 s).
-# Optional: INIT_CKPT (default poke_26214400.zip; "" = fresh policy), ROM_SHA1 ("" = skip check).
+# Optional: INIT_CKPT (default poke_26214400.zip for Red, fresh policy for Silver; "" = fresh policy), ROM_SHA1 ("" = skip check).
 # RunPod injects RUNPOD_POD_ID.
 set -uo pipefail
 
@@ -59,15 +59,16 @@ MODE="${MODE:-train}"
 RUN_ID="${RUN_ID:?RUN_ID not set}"
 GCS_BUCKET="${GCS_BUCKET:?GCS_BUCKET not set}"
 SYNC_INTERVAL="${SYNC_INTERVAL:-600}"
-INIT_CKPT="${INIT_CKPT-poke_26214400.zip}"
 STATE_NAME=""  # start state pulled next to the ROM (Silver's is never in git)
 if [ "${GBRL_GAME:-red}" = silver ]; then
     ROM_NAME="pokemon_silver_version.gbc"
     ROM_SHA1="${ROM_SHA1-49b163f7e57702bc939d642a18f591de55d92dae}"
     STATE_NAME="claude_totodile.state"
+    INIT_CKPT="${INIT_CKPT-}"  # RunPod drops empty env values: Red's checkpoint must not be Silver's default
     export GBRL_EP_LENGTH="${GBRL_EP_LENGTH:-32768}" GBRL_CKPT_FREQ="${GBRL_CKPT_FREQ:-500000}"
 else
     ROM_NAME="pokemon_red_version.gb"
+    INIT_CKPT="${INIT_CKPT-poke_26214400.zip}"
     ROM_SHA1="${ROM_SHA1-ea9bcae617fdf159b045185467ae58b2e4a48b9a}"
 fi
 
