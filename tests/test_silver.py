@@ -267,7 +267,7 @@ def test_processes_share_the_points_any_of_them_reached(tmp_path):
     a.reached(_Boy(), 3, 2)
     state, path = b.pick(np.random.default_rng(0), prob=1.0)
     assert state.read() == b"cherrygrove" and path == 3
-    b.reached(None, 3, 2)  # no closer than the shared point: the emulator is not even asked
+    b.reached(None, 3, 2)  # known already: the emulator is not even asked
     b.reached(_Boy(), 3, 1)
     assert sorted(p.name for p in tmp_path.iterdir()) == ["path_03_away_01.state", "path_03_away_02.state"]
 
@@ -278,6 +278,13 @@ def test_the_shared_points_are_not_written_by_games_that_may_not_start_there(tmp
     assert not list(tmp_path.iterdir())
 
 
+def test_the_goal_already_reached_does_not_hide_the_way_to_it():
+    f = silver.Frontier()
+    f.reached(_Boy(), 4, 0)  # a state in the lab with the egg
+    f.reached(_Boy(), 4, 5)  # the egg just got, far from home: worth practising too
+    assert set(f.states) == {(4, 0), (4, 5)}
+
+
 def test_practice_starts_are_half_the_furthest_point_and_half_anywhere_on_the_way():
     f = silver.Frontier()
     assert f.pick(np.random.default_rng(0), prob=1.0) is None  # nothing reached yet: normal start
@@ -286,7 +293,7 @@ def test_practice_starts_are_half_the_furthest_point_and_half_anywhere_on_the_wa
     assert not f.states
     for path, away in ((2, 2), (4, 5), (4, 4), (4, 3)):
         f.reached(_Boy(), path, away)
-    f.reached(None, 4, 5)  # walked back: not closer
+    f.reached(None, 4, 5)  # known already
     rng = np.random.default_rng(0)
     paths = [f.pick(rng, prob=1.0)[1] for _ in range(400)]
     assert 0.08 < paths.count(2) / 400 < 0.18  # 1 of 4 points, half the time

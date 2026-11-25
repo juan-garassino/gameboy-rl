@@ -181,7 +181,7 @@ class StallClock:
 class Frontier:
     """Points along the story any game has reached, so some games practise there instead of at home.
 
-    One state per (path step, maps left to the goal), saved only when a game gets closer than any before. Half the practice
+    One state per (path step, maps left to the goal): the first game to be there. Half the practice
     starts are the furthest point, half any of them, so the way between two steps is practised too. With a directory, all
     processes share the points.
     """
@@ -198,11 +198,8 @@ class Frontier:
             if (key := (int(path), int(away))) not in self.states:
                 self.states[key] = f.read_bytes()
 
-    def _closest(self, path: int) -> int:
-        return min((a for p, a in self.states if p == path), default=99)
-
     def reached(self, pyboy, path: int, away: int | None) -> None:
-        if path == 0 or away is None or away >= self._closest(path):
+        if path == 0 or away is None or (path, away) in self.states:
             return
         buf = io.BytesIO()
         pyboy.save_state(buf)
