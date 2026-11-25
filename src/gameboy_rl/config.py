@@ -35,11 +35,12 @@ class Settings(BaseSettings):
     keep_ckpts: int = 3  # GBRL_KEEP_CKPTS=3
     runs_dir: Path = Path("runs")  # GBRL_RUNS_DIR=/workspace/runs
     resume_from: Path | None = None  # GBRL_RESUME_FROM=/workspace/init/poke_26214400.zip (when no run ckpt yet)
-    eval_episodes: int = 5  # GBRL_EVAL_EPISODES=5 (silver: games per eval and per baseline; one game proves nothing)
-    stall_steps: int = 1024  # GBRL_STALL_STEPS=1024 (silver: end an episode after this many steps without progress)
+    eval_episodes: int = 3  # GBRL_EVAL_EPISODES=3 (silver: games per eval and per baseline; one game proves nothing)
+    stall_steps: int = 1024  # GBRL_STALL_STEPS=1024 (silver: dry steps that end a game, × (1 + path steps reached))
+    frontier_prob: float = 0.5  # GBRL_FRONTIER_PROB=0.5 (silver: share of games starting at the furthest point reached)
     ent_coef: float = 0.01  # GBRL_ENT_COEF=0.02 (silver: a stuck policy needs more exploration than Red's 0.01)
     eval_freq: int = 500_000  # GBRL_EVAL_FREQ=500000 (silver: color video + outcome stats)
-    eval_steps: int = 1500  # GBRL_EVAL_STEPS=1500 (agent steps per eval/baseline episode, ~10 min of game)
+    eval_steps: int = 4096  # GBRL_EVAL_STEPS=4096 (agent steps per eval/baseline game at most, ~27 min; a stalled game ends)
     stream: bool = False  # GBRL_STREAM=true (broadcasts coords to PWhiddy's PUBLIC map; off for privacy)
     stream_user: str = "gameboy-rl"  # GBRL_STREAM_USER=gameboy-rl (name shown on the public map)
     stop_on_critical: bool = True  # GBRL_STOP_ON_CRITICAL=false

@@ -99,6 +99,39 @@ def test_stall_clock_ends_an_episode_only_after_a_dry_spell():
     assert [clock.update(False), clock.update(False), clock.update(False)] == [False, False, True]
 
 
+def test_a_game_that_got_further_is_given_more_time():
+    clock = StallClock(limit=3)
+    assert [clock.update(False, patience=2) for _ in range(6)] == [False, False, False, False, False, True]
+
+
+def test_the_path_goes_back_to_elm_with_the_egg():
+    names = [name for _, _, name in silver.PATH]
+    assert names.index("Mr. Pokemon's house") + 1 == names.index("Elm's lab (egg)") < names.index("Route 31")
+
+
+def test_a_game_can_start_further_along_the_path():
+    ram = _ram()
+    s = SilverStats(ram.__getitem__, path=2)
+    assert s.value() == 0.0 and s.path == 2
+    _visit(ram, s, silver.PATH[2][:2])
+    assert s.path == 3 and s.value() == pytest.approx(silver.PATH_REWARDS[2] + 0.11)
+
+
+class _Boy:
+    def save_state(self, f):
+        f.write(b"cherrygrove")
+
+
+def test_frontier_remembers_the_furthest_point_and_replays_it():
+    f = silver.Frontier()
+    assert f.pick(np.random.default_rng(0), prob=1.0) is None  # nothing reached yet: normal start
+    f.reached(_Boy(), 2)
+    f.reached(None, 1)  # not further: ignored, the emulator is not even asked
+    state, path = f.pick(np.random.default_rng(0), prob=1.0)
+    assert state.read() == b"cherrygrove" and path == 2
+    assert f.pick(np.random.default_rng(0), prob=0.0) is None
+
+
 def test_stall_limit_and_entropy_bonus_are_settings():
     from gameboy_rl.config import Settings
     from gameboy_rl.train import ppo_params
@@ -118,7 +151,7 @@ class _StubEnv:
     action_space = Discrete(6)
 
     def __init__(self, idle_reward=0.0):
-        self.idle_reward, self.calls = idle_reward, []
+        self.idle_reward, self.calls, self.ends_at = idle_reward, [], None
         self.stats = SilverStats(_ram().__getitem__)
 
     def reset(self):
@@ -126,7 +159,7 @@ class _StubEnv:
 
     def step(self, action):
         self.calls.append(action)
-        return {}, 1.0, False, False, {"progress": self.stats.progress()}
+        return {}, 1.0, self.ends_at == len(self.calls), False, {"progress": self.stats.progress()}
 
     def step_nothing(self):
         self.calls.append(None)
@@ -144,6 +177,13 @@ def test_baselines_compare_nothing_and_random():
 def test_refuses_to_train_when_doing_nothing_pays():
     with pytest.raises(DoNothingEarnsReward):
         run_baselines(_StubEnv(idle_reward=0.01), steps=5)
+
+
+def test_play_episode_stops_when_the_game_stalls():
+    env = _StubEnv()
+    env.ends_at = 3
+    play_episode(env, 50, lambda obs: 0)
+    assert len(env.calls) == 3
 
 
 def test_baselines_average_several_games():

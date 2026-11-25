@@ -16,13 +16,16 @@ from gameboy_rl.silver import SilverEnv, play_episodes, run_baselines
 
 logger = logging.getLogger(__name__)
 VIDEO_FPS = 8  # one agent step = 0.4 s of game, so ~3x real speed
+VIDEO_SCALE = 4  # the screen is 160x144: players open that tiny
 
 
 class SilverEvalCallback(BaseCallback):
     def __init__(self, cfg: Settings, run_dir: Path, heartbeat: Callable[[], None] | None = None,
                  env_factory: Callable[[Settings], object] = SilverEnv):
         super().__init__()
-        self.cfg, self.run_dir, self.heartbeat, self.env_factory = cfg, Path(run_dir), heartbeat, env_factory
+        # judged from the normal start only, whatever the training games do
+        self.cfg = cfg.model_copy(update={"frontier_prob": 0.0})
+        self.run_dir, self.heartbeat, self.env_factory = Path(run_dir), heartbeat, env_factory
         self.next_eval = 0
 
     def _on_training_start(self) -> None:
@@ -53,7 +56,9 @@ class SilverEvalCallback(BaseCallback):
             env.close()
         video = self.run_dir / "videos" / f"eval_{steps:010d}.mp4"
         video.parent.mkdir(parents=True, exist_ok=True)
-        imageio.mimwrite(str(video), frames, fps=VIDEO_FPS, macro_block_size=16, format="FFMPEG")
+        with imageio.get_writer(str(video), fps=VIDEO_FPS, macro_block_size=16, format="FFMPEG") as writer:
+            for frame in frames:
+                writer.append_data(frame.repeat(VIDEO_SCALE, axis=0).repeat(VIDEO_SCALE, axis=1))
         mlflow_tracking.log_artifact(video, "videos")
         mlflow_tracking.log_metrics({f"eval/{k}": v for k, v in stats.items()}, step=steps)
         logger.info("eval @%d: %s areas=%s", steps, stats, areas)

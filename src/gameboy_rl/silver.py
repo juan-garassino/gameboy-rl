@@ -5,7 +5,7 @@ The reward pays only for game progress a player would recognise, so doing nothin
 """
 from __future__ import annotations
 
-from pathlib import Path
+import io
 from typing import Callable
 
 import gymnasium as gym
@@ -28,7 +28,7 @@ WEIGHTS = {"badge": 50.0, "event": 2.0, "map": 0.1, "caught": 1.0, "level": 0.5,
 # The story's road to the first badge, from pret/pokegold's map_constants.asm. Each step pays more than the last.
 PATH: list[tuple[int, int, str]] = [
     (24, 3, "Route 29"), (26, 3, "Cherrygrove City"), (26, 1, "Route 30"), (26, 10, "Mr. Pokemon's house"),
-    (26, 2, "Route 31"), (10, 5, "Violet City"), (10, 7, "Violet Gym"),
+    (24, 5, "Elm's lab (egg)"), (26, 2, "Route 31"), (10, 5, "Violet City"), (10, 7, "Violet Gym"),
 ]
 PATH_REWARDS = [3.0 + i for i in range(len(PATH))]
 AREAS: dict[tuple[int, int], str] = {
@@ -48,11 +48,12 @@ def _bits(read: Read, start: int, end: int) -> int:
 class SilverStats:
     """Game progress, read from RAM. Every count is a high-water mark, so nothing can be farmed by toggling."""
 
-    def __init__(self, read: Read):
+    def __init__(self, read: Read, path: int = 0):
         self.read = read
+        self.start_path = path
         self.tiles: set[tuple[int, int, int, int]] = set()
         self.maps: dict[tuple[int, int], None] = {}  # an ordered set: the order areas were reached in
-        self.path = 0
+        self.path = path
         self.base = self._raw()
         self.best = dict(self.base)
         self.observe()
@@ -82,7 +83,7 @@ class SilverStats:
 
     def value(self) -> float:
         p = self.progress()
-        return sum(w * p[k] for k, w in WEIGHTS.items()) + sum(PATH_REWARDS[:self.path])
+        return sum(w * p[k] for k, w in WEIGHTS.items()) + sum(PATH_REWARDS[self.start_path:self.path])
 
     def areas(self) -> list[str]:
         return [AREAS.get(m, f"map {m[0]}.{m[1]}") for m in self.maps]
@@ -102,9 +103,28 @@ class StallClock:
     def __init__(self, limit: int):
         self.limit, self.dry = limit, 0
 
-    def update(self, progressed: bool) -> bool:
+    def update(self, progressed: bool, patience: int = 1) -> bool:
         self.dry = 0 if progressed else self.dry + 1
-        return self.dry >= self.limit
+        return self.dry >= self.limit * patience
+
+
+class Frontier:
+    """The furthest point on the path this process has reached, so some games practise there instead of at home."""
+
+    def __init__(self):
+        self.state: bytes | None = None
+        self.path = 0
+
+    def reached(self, pyboy, path: int) -> None:
+        if path > self.path:
+            buf = io.BytesIO()
+            pyboy.save_state(buf)
+            self.state, self.path = buf.getvalue(), path
+
+    def pick(self, rng: np.random.Generator, prob: float) -> tuple[io.BytesIO, int] | None:
+        if self.state is None or rng.random() >= prob:
+            return None
+        return io.BytesIO(self.state), self.path
 
 
 class SilverEnv(gym.Env):
@@ -128,6 +148,7 @@ class SilverEnv(gym.Env):
             "recent_actions": spaces.MultiDiscrete([len(BUTTONS)] * FRAME_STACK),
         })
         self.stats: SilverStats | None = None
+        self.frontier = Frontier()
 
     def _read(self, addr: int) -> int:
         return self.pyboy.memory[1, addr]  # WRAM bank 1, whatever bank the game has paged in
@@ -137,10 +158,14 @@ class SilverEnv(gym.Env):
 
     def reset(self, *, seed=None, options=None):
         super().reset(seed=seed)
-        with open(self.cfg.init_state_path, "rb") as f:
-            self.pyboy.load_state(f)
+        further = self.frontier.pick(self.np_random, self.cfg.frontier_prob)
+        if further:
+            self.pyboy.load_state(further[0])
+        else:
+            with open(self.cfg.init_state_path, "rb") as f:
+                self.pyboy.load_state(f)
         self.pyboy.tick(1 + int(self.np_random.integers(0, 60)), True)  # vary the RNG so envs are not clones
-        self.stats = SilverStats(self._read)
+        self.stats = SilverStats(self._read, path=further[1] if further else 0)
         self.value, self.steps = 0.0, 0
         self.stall = StallClock(self.cfg.stall_steps)
         self.screens = np.zeros((72, 80, 3 * FRAME_STACK), np.uint8)
@@ -162,12 +187,13 @@ class SilverEnv(gym.Env):
         self.pyboy.tick(frames - 1, False)
         self.pyboy.tick(1, True)
         self.stats.observe()
+        self.frontier.reached(self.pyboy, self.stats.path)
         self.recent = np.roll(self.recent, 1)
         self.recent[0] = action
         self.steps += 1
         new = self.stats.value()
         reward, self.value = new - self.value, new
-        return self._obs(), float(reward), self.stall.update(reward > 0), self.steps >= self.cfg.ep_length, {"progress": self.stats.progress()}
+        return self._obs(), float(reward), self.stall.update(reward > 0, patience=1 + self.stats.path), self.steps >= self.cfg.ep_length, {"progress": self.stats.progress()}
 
     def _obs(self) -> dict:
         self.screens = np.roll(self.screens, 3, axis=2)
@@ -218,11 +244,11 @@ def play_episode(env, steps: int, choose: Callable[[dict], int | None], heartbea
         if heartbeat is not None:
             heartbeat()
         action = choose(obs)
-        obs, reward, _, truncated, info = env.step_nothing() if action is None else env.step(action)
+        obs, reward, stalled, truncated, info = env.step_nothing() if action is None else env.step(action)
         total += reward
         if frames is not None:
             frames.append(env.render())
-        if truncated:
+        if stalled or truncated:
             break
     return {"return": total, **{k: float(v) for k, v in info["progress"].items()}}
 
