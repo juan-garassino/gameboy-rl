@@ -25,7 +25,7 @@ PARTY_COUNT, PARTY, MON_SIZE, EXP, LEVEL, HP, MAX_HP = 0xDA22, 0xDA2A, 0x30, 0x0
 BUTTONS = ["down", "left", "right", "up", "a", "b"]  # no START: menus and saving are not progress
 ACTION_FRAMES, PRESS_FRAMES = 24, 8
 FRAME_STACK = 3
-WEIGHTS = {"badge": 50.0, "event": 2.0, "map": 0.1, "caught": 1.0, "level": 0.5, "exp": 0.01, "tile": 0.005, "road_tile": 0.045}  # road_tile adds to tile
+WEIGHTS = {"badge": 50.0, "event": 2.0, "map": 0.1, "caught": 1.0, "level": 2.0, "exp": 0.03, "tile": 0.005, "road_tile": 0.045}  # road_tile adds to tile
 
 # The story's road to the first badge, from pret/pokegold's map_constants.asm. Each step pays more than the last.
 PATH: list[tuple[int, int, str]] = [
