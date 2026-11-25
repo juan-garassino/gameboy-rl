@@ -6,6 +6,8 @@ The reward pays only for game progress a player would recognise, so doing nothin
 from __future__ import annotations
 
 import io
+import os
+from pathlib import Path
 from typing import Callable
 
 import gymnasium as gym
@@ -117,19 +119,37 @@ class StallClock:
 
 
 class Frontier:
-    """The furthest point on the path this process has reached, so some games practise there instead of at home."""
+    """The furthest point on the path any game has reached, so some games practise there instead of at home.
 
-    def __init__(self):
+    With a directory, all processes share it: one lucky game moves everyone's starting point forward.
+    """
+
+    def __init__(self, directory: Path | None = None, share: bool = True):
+        self.directory = directory if share else None
         self.state: bytes | None = None
         self.path = 0
+
+    def _sync(self) -> None:
+        if self.directory is None or not self.directory.is_dir():
+            return
+        found = sorted(self.directory.glob("path_*.state"))
+        if found and (path := int(found[-1].stem.split("_")[1])) > self.path:
+            self.state, self.path = found[-1].read_bytes(), path
 
     def reached(self, pyboy, path: int) -> None:
         if path > self.path:
             buf = io.BytesIO()
             pyboy.save_state(buf)
             self.state, self.path = buf.getvalue(), path
+            if self.directory is not None:
+                self.directory.mkdir(parents=True, exist_ok=True)
+                tmp = self.directory / f".path_{path:02d}.{os.getpid()}.tmp"
+                tmp.write_bytes(self.state)
+                tmp.replace(self.directory / f"path_{path:02d}.state")  # atomic: readers never see half a state
 
     def pick(self, rng: np.random.Generator, prob: float) -> tuple[io.BytesIO, int] | None:
+        if prob > 0:
+            self._sync()
         if self.state is None or rng.random() >= prob:
             return None
         return io.BytesIO(self.state), self.path
@@ -156,7 +176,7 @@ class SilverEnv(gym.Env):
             "recent_actions": spaces.MultiDiscrete([len(BUTTONS)] * FRAME_STACK),
         })
         self.stats: SilverStats | None = None
-        self.frontier = Frontier()
+        self.frontier = Frontier(cfg.run_dir / "frontier", share=cfg.frontier_prob > 0)
 
     def _read(self, addr: int) -> int:
         return self.pyboy.memory[1, addr]  # WRAM bank 1, whatever bank the game has paged in

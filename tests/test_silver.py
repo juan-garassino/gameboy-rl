@@ -145,6 +145,22 @@ class _Boy:
         f.write(b"cherrygrove")
 
 
+def test_processes_share_the_furthest_point_any_of_them_reached(tmp_path):
+    a, b = silver.Frontier(tmp_path), silver.Frontier(tmp_path)
+    rng = np.random.default_rng(0)
+    a.reached(_Boy(), 3)
+    state, path = b.pick(rng, prob=1.0)
+    assert state.read() == b"cherrygrove" and path == 3
+    b.reached(_Boy(), 2)  # behind the shared point: nothing to save
+    assert [p.name for p in tmp_path.iterdir()] == ["path_03.state"]
+
+
+def test_the_shared_point_is_not_written_by_games_that_may_not_start_there(tmp_path):
+    f = silver.Frontier(tmp_path, share=False)
+    f.reached(_Boy(), 2)
+    assert not list(tmp_path.iterdir())
+
+
 def test_frontier_remembers_the_furthest_point_and_replays_it():
     f = silver.Frontier()
     assert f.pick(np.random.default_rng(0), prob=1.0) is None  # nothing reached yet: normal start
