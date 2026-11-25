@@ -35,6 +35,7 @@ class Settings(BaseSettings):
     keep_ckpts: int = 3  # GBRL_KEEP_CKPTS=3
     runs_dir: Path = Path("runs")  # GBRL_RUNS_DIR=/workspace/runs
     resume_from: Path | None = None  # GBRL_RESUME_FROM=/workspace/init/poke_26214400.zip (when no run ckpt yet)
+    eval_episodes: int = 5  # GBRL_EVAL_EPISODES=5 (silver: games per eval and per baseline; one game proves nothing)
     stall_steps: int = 1024  # GBRL_STALL_STEPS=1024 (silver: end an episode after this many steps without progress)
     ent_coef: float = 0.01  # GBRL_ENT_COEF=0.02 (silver: a stuck policy needs more exploration than Red's 0.01)
     eval_freq: int = 500_000  # GBRL_EVAL_FREQ=500000 (silver: color video + outcome stats)
