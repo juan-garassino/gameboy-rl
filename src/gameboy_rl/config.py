@@ -42,7 +42,7 @@ class Settings(BaseSettings):
     n_epochs: int = 1  # GBRL_N_EPOCHS=3 (silver: with 1 pass per batch it stayed near-random, entropy 1.65-1.75 of 1.79)
     ent_coef: float = 0.01  # GBRL_ENT_COEF=0.01 (0.02 kept Silver near-random; StallClock now handles being stuck)
     eval_freq: int = 500_000  # GBRL_EVAL_FREQ=500000 (silver: color video + outcome stats)
-    eval_steps: int = 4096  # GBRL_EVAL_STEPS=4096 (agent steps per eval/baseline game at most, ~27 min; a stalled game ends)
+    eval_steps: int = 10_000  # GBRL_EVAL_STEPS=10000 (agent steps per eval game at most; at 4096 no game had time to bring the egg back)
     stream: bool = False  # GBRL_STREAM=true (broadcasts coords to PWhiddy's PUBLIC map; off for privacy)
     stream_user: str = "gameboy-rl"  # GBRL_STREAM_USER=gameboy-rl (name shown on the public map)
     stop_on_critical: bool = True  # GBRL_STOP_ON_CRITICAL=false

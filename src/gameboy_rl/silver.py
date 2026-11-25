@@ -29,7 +29,7 @@ FRAME_STACK = 3
 # Story flags that mean real progress (numbers: achievements.STORY), in points. Other flags pay nothing.
 STORY_PAY = {30: 5.0, 31: 15.0, **{i: 30.0 for i in range(1213, 1221)}}
 HEAL_PAY, HEAL_MAX = 0.5, 3.0  # per full party restored outside battle, at most this much per game
-WEIGHTS = {"badge": 50.0, "story": 1.0, "healed": 1.0, "map": 0.1, "caught": 1.0, "level": 2.0, "exp": 0.03, "tile": 0.005, "road_tile": 0.045, "retraced": 0.0}  # road_tile adds to tile; retraced is only counted
+WEIGHTS = {"badge": 50.0, "story": 1.0, "healed": 1.0, "map": 0.1, "caught": 1.0, "level": 0.5, "exp": 0.002, "tile": 0.005, "road_tile": 0.045, "retraced": 0.0}  # road_tile adds to tile; retraced is only counted
 
 # The story's road to the first badge, from pret/pokegold's map_constants.asm. Each step pays more than the last.
 PATH: list[tuple[int, int, str]] = [
@@ -39,10 +39,11 @@ PATH: list[tuple[int, int, str]] = [
 # Steps that are done only when the game's own flag says so (being in the room is not enough): the egg got, the egg given.
 NEEDS_FLAG = {3: 30, 4: 31}
 # Where each map lies along the road, so a compass can say how far the next goal is (interiors not listed keep the last).
-ROAD_ORDER = {(24, 4): 0, (24, 5): 0, (24, 3): 1, (26, 3): 2, (26, 1): 3, (26, 10): 4, (26, 2): 4, (10, 5): 5, (10, 7): 6}
+ROAD_ORDER = {(24, 6): 0, (24, 7): 0, (24, 4): 0, (24, 5): 0, (24, 3): 1, (26, 3): 2, (26, 1): 3, (26, 10): 4, (26, 2): 4, (10, 5): 5, (10, 7): 6}
 COMPASS = 3.0  # paid per map closer to the next goal (and in part per tile), taken back when moving away: loops cancel
 _LAB, _HOUSE = (24, 5), (26, 10)  # Elm's, Mr. Pokemon's
 _DOORS = {_LAB: 0.45, _HOUSE: 3.89}  # where those two doors stand along the road
+_DOOR_TILES = {_LAB: ((24, 4), 6, 3, 20), _HOUSE: ((26, 1), 17, 5, 66)}  # outside: (map, x, y, tiles that count as one map)
 
 
 def road_position(m: tuple[int, int], x: int, y: int) -> float | None:
@@ -52,6 +53,10 @@ def road_position(m: tuple[int, int], x: int, y: int) -> float | None:
     """
     if m in _DOORS:
         return _DOORS[m]
+    if m == (24, 7):  # player's house 2F, where a knockout leaves you: to the stairs
+        return -0.05 - 0.15 * min(1.0, (abs(x - 7) + y) / 12)
+    if m == (24, 6):  # 1F: to the door
+        return 0.15 - 0.15 * min(1.0, (abs(x - 6) + abs(y - 7)) / 14)
     if m == (24, 4):  # New Bark: the way out is west, around (0, 8)
         return 1 - min(1.0, (x + abs(y - 8)) / 20)
     if m == (24, 3):  # Route 29, walked east to west
@@ -178,7 +183,11 @@ class SilverStats:
         rest = 0.0 if in_goal else 0.5
         if in_goal and m == _LAB:  # up to Elm: the egg was handed over from (4, 2)
             rest = 0.5 * min(1.0, (abs(self.read(X) - 4) + abs(self.read(Y) - 2)) / 12)
-        near = -(abs(target - position) + rest)
+        far = abs(target - position)
+        if goal_map in _DOOR_TILES and m == _DOOR_TILES[goal_map][0]:  # on the door's own map: walk to the door itself
+            _, dx, dy, scale = _DOOR_TILES[goal_map]
+            far = (abs(self.read(X) - dx) + abs(self.read(Y) - dy)) / scale
+        near = -(far + rest)
         if self._near is not None and self._goal_step == self.path:
             self.shaping += COMPASS * (near - self._near)
         self._near, self._goal, self._goal_step = near, goal, self.path

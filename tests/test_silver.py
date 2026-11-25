@@ -30,7 +30,7 @@ def test_doing_nothing_is_worth_nothing():
 
 @pytest.mark.parametrize("change,expected", [
     ({silver.JOHTO_BADGES: 1}, 50.0), ({silver.CAUGHT_START: 1}, 1.0),
-    ({silver.PARTY + silver.LEVEL: 6}, 2.0), ({silver.X: 7}, 0.005), ({silver.MAP_NUMBER: 5}, 0.105)])
+    ({silver.PARTY + silver.LEVEL: 6}, 0.5), ({silver.X: 7}, 0.005), ({silver.MAP_NUMBER: 5}, 0.105)])
 def test_progress_is_rewarded(change, expected):
     ram = _ram()
     s = SilverStats(ram.__getitem__)
@@ -109,6 +109,36 @@ def test_road_pays_once_per_step_and_only_toward_the_goal():
     assert s.shaping > 0
 
 
+def test_levelling_up_pays_less_than_the_story():
+    ram = _ram()
+    s = SilverStats(ram.__getitem__, path=4)
+    ram[silver.PARTY + silver.LEVEL] = 12  # level 5 to 12, about 1600 experience: Route 30's grass
+    ram[silver.PARTY + silver.EXP + 1] = 1600 // 256
+    s.observe()
+    assert s.base_value() < (silver.PATH_REWARDS[4] + silver.STORY_PAY[31]) / 3
+
+
+def test_the_compass_leads_out_of_the_house_and_to_the_door_itself():
+    ram = _ram()
+    ram[silver.MAP_NUMBER], ram[silver.X], ram[silver.Y] = 7, 3, 3  # upstairs, after a knockout; goal: Route 29
+    s = SilverStats(ram.__getitem__)
+    last = s.shaping
+    for number, x, y in ((7, 7, 0), (6, 9, 0), (6, 6, 7), (4, 13, 5), (4, 0, 8)):
+        ram[silver.MAP_NUMBER], ram[silver.X], ram[silver.Y] = number, x, y
+        s.observe()
+        assert s.shaping > last, (number, x, y)
+        last = s.shaping
+    ram[silver.X], ram[silver.Y] = 0, 9
+    s = SilverStats(ram.__getitem__, path=4)  # egg in hand, in New Bark: only the lab's door is closest
+    best = {}
+    for x in range(20):
+        for y in range(18):
+            ram[silver.X], ram[silver.Y] = x, y
+            s.observe()
+            best[(x, y)] = s.shaping
+    assert max(best, key=best.get) == (6, 3) and sorted(best.values())[-2] < best[(6, 3)] - 0.1
+
+
 def test_inside_the_lab_the_compass_leads_to_elm():
     ram = _ram()
     ram[silver.MAP_NUMBER], ram[silver.X], ram[silver.Y] = 5, 4, 11
@@ -126,7 +156,7 @@ def test_the_compass_works_tile_by_tile_along_the_road():
              silver.road_position((24, 3), 20, 9), silver.road_position((26, 3), 39, 7), silver.road_position((26, 3), 17, 0),
              silver.road_position((26, 1), 6, 53), silver.road_position((26, 1), 6, 20), silver.road_position((26, 10), 3, 6),
              silver.road_position((26, 2), 39, 9), silver.road_position((26, 2), 5, 9), silver.road_position((10, 5), 1, 1)]
-    assert along == sorted(along) and silver.road_position((24, 6), 1, 1) is None
+    assert along == sorted(along) and silver.road_position((24, 8), 1, 1) is None
     ram = _ram()
     ram[silver.MAP_NUMBER], ram[silver.X] = 3, 40
     s = SilverStats(ram.__getitem__, path=1)  # goal Cherrygrove, west along Route 29
@@ -473,3 +503,12 @@ def test_each_achievement_is_logged_once_for_all_games_and_the_start_does_not_co
     import json
     saved = json.loads((tmp_path / "event_30.json").read_text())
     assert saved["path_step"] == 4 and saved["game_steps"] == 900
+
+
+def test_a_check_counts_games_per_story_step():
+    from gameboy_rl.check import summary
+
+    g = {"steps": 100, "level": 8, "badges": 0, "house_steps": 10}
+    s = summary([{**g, "path": 4}, {**g, "path": 5, "badges": 1}, {**g, "path": 2}])
+    assert s["got to"]["Mr. Pokemon's house"] == 2 and s["got to"]["Elm's lab (egg)"] == 1 and s["got to"]["Route 31"] == 0
+    assert s["badges"] == 1 and s["share of steps in the player's house"] == pytest.approx(0.1)
