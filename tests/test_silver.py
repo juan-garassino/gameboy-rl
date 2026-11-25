@@ -139,6 +139,26 @@ def test_the_compass_leads_out_of_the_house_and_to_the_door_itself():
     assert max(best, key=best.get) == (6, 3) and sorted(best.values())[-2] < best[(6, 3)] - 0.1
 
 
+# (path step while there, map, tiles, the tiles where the compass may be at its best on that map)
+@pytest.mark.parametrize("path,m,size,best", [
+    (4, (26, 1), (20, 54), {(x, 53) for x in range(20)}), (4, (26, 3), (40, 18), {(39, 7)}),
+    (4, (24, 3), (60, 18), {(59, y) for y in range(18)}), (4, (24, 4), (20, 18), {(6, 3)}),
+    (0, (24, 4), (20, 18), {(0, 8)}), (1, (24, 3), (60, 18), {(0, y) for y in range(18)}),
+    (2, (26, 3), (40, 18), {(17, 0)}), (3, (26, 1), (20, 54), {(17, 5)})])
+def test_no_tile_but_the_way_on_is_where_the_compass_rests(path, m, size, best):
+    ram = _ram()
+    ram[silver.MAP_GROUP], ram[silver.MAP_NUMBER], ram[silver.X], ram[silver.Y] = *m, 0, 0
+    s = SilverStats(ram.__getitem__, path=path)
+    score = {}
+    for x in range(size[0]):
+        for y in range(size[1]):
+            ram[silver.X], ram[silver.Y] = x, y
+            s.observe()
+            score[(x, y)] = s.shaping
+    top = max(score.values())
+    assert s.path == path and {tile for tile, v in score.items() if v > top - 1e-9} <= best
+
+
 def test_inside_the_lab_the_compass_leads_to_elm():
     ram = _ram()
     ram[silver.MAP_NUMBER], ram[silver.X], ram[silver.Y] = 5, 4, 11

@@ -46,27 +46,29 @@ _DOORS = {_LAB: 0.45, _HOUSE: 3.89}  # where those two doors stand along the roa
 _DOOR_TILES = {_LAB: ((24, 4), 6, 3, 20), _HOUSE: ((26, 1), 17, 5, 66)}  # outside: (map, x, y, tiles that count as one map)
 
 
-def road_position(m: tuple[int, int], x: int, y: int) -> float | None:
+def road_position(m: tuple[int, int], x: int, y: int, home: bool = False) -> float | None:
     """How far along the road home -> Violet City a tile is, in maps (3.5 = halfway up Route 30). None: not on the road.
 
-    Map sizes are read from the game (New Bark 20x18 tiles, Route 29 60x18, Cherrygrove 40x18, Route 30 20x54).
+    Within a map it counts the tiles to the exit we want: the one toward Violet, or with `home` the one back. (Measured to
+    one exit only, a corner of Cherrygrove looked as good as the way home, and 8 of 8 games stayed in it.)
+    Map sizes and doors are read from the game (New Bark 20x18 tiles, Route 29 60x18, Cherrygrove 40x18, Route 30 20x54).
     """
     if m in _DOORS:
         return _DOORS[m]
     if m == (24, 7):  # player's house 2F, where a knockout leaves you: to the stairs
-        return -0.05 - 0.15 * min(1.0, (abs(x - 7) + y) / 12)
+        return -0.05 - 0.15 * (abs(x - 7) + y) / 12
     if m == (24, 6):  # 1F: to the door
-        return 0.15 - 0.15 * min(1.0, (abs(x - 6) + abs(y - 7)) / 14)
+        return 0.15 - 0.15 * (abs(x - 6) + abs(y - 7)) / 14
     if m == (24, 4):  # New Bark: the way out is west, around (0, 8)
-        return 1 - min(1.0, (x + abs(y - 8)) / 20)
-    if m == (24, 3):  # Route 29, walked east to west
-        return 1 + min(1.0, max(0, 59 - x) / 60)
-    if m == (26, 3):  # Cherrygrove: in at (39, 7), out north around (17, 0)
-        return 2 + 1 - min(1.0, (abs(x - 17) + y) / 29)
-    if m == (26, 1):  # Route 30, walked south to north
-        return 3 + min(1.0, max(0, 53 - y) / 54)
+        return 1 - (x + abs(y - 8)) / 20
+    if m == (24, 3):  # Route 29: east end (59, 8) to west end (0, 7)
+        return 1 + (59 - x) / 60
+    if m == (26, 3):  # Cherrygrove: east end (39, 7), north end (17, 0)
+        return 2 + (abs(x - 39) + abs(y - 7)) / 29 if home else 3 - (abs(x - 17) + y) / 29
+    if m == (26, 1):  # Route 30, south end to north end
+        return 3 + (53 - y) / 54
     if m == (26, 2):  # Route 31, walked east to west
-        return 4 + min(1.0, max(0, 39 - x) / 40)
+        return 4 + (39 - x) / 40
     return {(10, 5): 5.0, (10, 7): 6.0}.get(m)
 
 
@@ -173,10 +175,10 @@ class SilverStats:
     def _compass(self) -> None:
         m = (self.read(MAP_GROUP), self.read(MAP_NUMBER))
         here = ROAD_ORDER.get(m)
-        position = road_position(m, self.read(X), self.read(Y))
+        goal_map = PATH[self.path][:2] if self.path < len(PATH) else None
+        position = road_position(m, self.read(X), self.read(Y), home=goal_map == _LAB)
         if here is None or position is None or self.path >= len(PATH):
             return
-        goal_map = PATH[self.path][:2]
         in_goal, goal = m == goal_map, ROAD_ORDER[goal_map]
         self._here, self._away = here, abs(goal - here) + (not in_goal)
         target = _DOORS.get(goal_map, float(goal))
