@@ -29,7 +29,7 @@ FRAME_STACK = 3
 # Story flags that mean real progress (numbers: achievements.STORY), in points. Other flags pay nothing.
 STORY_PAY = {30: 5.0, 31: 15.0, **{i: 30.0 for i in range(1213, 1221)}}
 HEAL_PAY, HEAL_MAX = 0.5, 3.0  # per full party restored outside battle, at most this much per game
-WEIGHTS = {"badge": 50.0, "story": 1.0, "healed": 1.0, "map": 0.1, "caught": 1.0, "level": 2.0, "exp": 0.03, "tile": 0.005, "road_tile": 0.045, "retraced": 0.01}  # road_tile adds to tile
+WEIGHTS = {"badge": 50.0, "story": 1.0, "healed": 1.0, "map": 0.1, "caught": 1.0, "level": 2.0, "exp": 0.03, "tile": 0.005, "road_tile": 0.045, "retraced": 0.0}  # road_tile adds to tile; retraced is only counted
 
 # The story's road to the first badge, from pret/pokegold's map_constants.asm. Each step pays more than the last.
 PATH: list[tuple[int, int, str]] = [
@@ -40,7 +40,31 @@ PATH: list[tuple[int, int, str]] = [
 NEEDS_FLAG = {3: 30, 4: 31}
 # Where each map lies along the road, so a compass can say how far the next goal is (interiors not listed keep the last).
 ROAD_ORDER = {(24, 4): 0, (24, 5): 0, (24, 3): 1, (26, 3): 2, (26, 1): 3, (26, 10): 4, (26, 2): 4, (10, 5): 5, (10, 7): 6}
-COMPASS = 1.0  # paid per map closer to the next goal, taken back per map farther: it cancels over any loop
+COMPASS = 3.0  # paid per map closer to the next goal (and in part per tile), taken back when moving away: loops cancel
+_LAB, _HOUSE = (24, 5), (26, 10)  # Elm's, Mr. Pokemon's
+_DOORS = {_LAB: 0.45, _HOUSE: 3.89}  # where those two doors stand along the road
+
+
+def road_position(m: tuple[int, int], x: int, y: int) -> float | None:
+    """How far along the road home -> Violet City a tile is, in maps (3.5 = halfway up Route 30). None: not on the road.
+
+    Map sizes are read from the game (New Bark 20x18 tiles, Route 29 60x18, Cherrygrove 40x18, Route 30 20x54).
+    """
+    if m in _DOORS:
+        return _DOORS[m]
+    if m == (24, 4):  # New Bark: the way out is west, around (0, 8)
+        return 1 - min(1.0, (x + abs(y - 8)) / 20)
+    if m == (24, 3):  # Route 29, walked east to west
+        return 1 + min(1.0, max(0, 59 - x) / 60)
+    if m == (26, 3):  # Cherrygrove: in at (39, 7), out north around (17, 0)
+        return 2 + 1 - min(1.0, (abs(x - 17) + y) / 29)
+    if m == (26, 1):  # Route 30, walked south to north
+        return 3 + min(1.0, max(0, 53 - y) / 54)
+    if m == (26, 2):  # Route 31, walked east to west
+        return 4 + min(1.0, max(0, 39 - x) / 40)
+    return {(10, 5): 5.0, (10, 7): 6.0}.get(m)
+
+
 _ROADS = {(g, n) for g, n, name in PATH if name.startswith("Route") or name.endswith("City")}  # not interiors
 PATH_REWARDS = [3.0 + i for i in range(len(PATH))]
 AREAS: dict[tuple[int, int], str] = {
@@ -74,6 +98,9 @@ class SilverStats:
         self.shaping = 0.0  # the compass: summed since the start, changes with the map, never counts as progress
         self._near: float | None = None
         self._goal = self._here = 0
+        self._goal_step = -1
+        self._away: int | None = None
+        self._step_away: tuple[int, int] = (path, 99)  # (path step, fewest maps left to the goal during it)
         self.retraced = 0  # old PATH tiles walked again after a later step of the path (each once per step)
         self.road_seen: set[tuple[int, int, int, int, int]] = set()
         self.base = self._raw()
@@ -114,34 +141,47 @@ class SilverStats:
             if self.path < len(PATH) and m == PATH[self.path][:2] and self._flag_done(NEEDS_FLAG.get(self.path)):
                 self.path += 1
             tile = (*m, self.read(X), self.read(Y))
-            if m in _ROADS and (self.path, *tile) not in self.road_seen:
-                self.road_seen.add((self.path, *tile))
-                if tile in self.tiles:
-                    self.retraced += 1  # an old road walked again after a new step: a little, so the way back has a pull
-                else:
-                    self.road_tiles += 1
-            self.tiles.add(tile)
             self._compass()
+            if self._closest_yet() and m in _ROADS and (self.path, *tile) not in self.road_seen:
+                self.road_seen.add((self.path, *tile))
+                self.road_tiles += 1  # once per path step, new or old ground, but never on maps away from the goal
+                self.retraced += tile in self.tiles
+            self.tiles.add(tile)
 
     def _flag_done(self, i: int | None) -> bool:
         return i is None or bool(self.read(EVENTS_START + i // 8) >> (i % 8) & 1)
 
+    def _closest_yet(self) -> bool:
+        """Is this map as near the goal as this path step has got? The wrong way pays nothing."""
+        if self.path >= len(PATH) or self.away is None:
+            return True
+        step, best = self._step_away
+        best = min(best, self.away) if step == self.path else self.away
+        self._step_away = (self.path, best)
+        return self.away <= best
+
     @property
     def away(self) -> int | None:
         """Maps to the next goal, plus one until the goal's own map is entered (None: not known yet)."""
-        return None if self._near is None else int(-self._near)
+        return self._away
 
     def _compass(self) -> None:
-        here = ROAD_ORDER.get((self.read(MAP_GROUP), self.read(MAP_NUMBER)))
-        if here is None or self.path >= len(PATH):
+        m = (self.read(MAP_GROUP), self.read(MAP_NUMBER))
+        here = ROAD_ORDER.get(m)
+        position = road_position(m, self.read(X), self.read(Y))
+        if here is None or position is None or self.path >= len(PATH):
             return
-        self._here = here
-        goal = ROAD_ORDER[PATH[self.path][:2]]
-        in_goal = (self.read(MAP_GROUP), self.read(MAP_NUMBER)) == PATH[self.path][:2]
-        near = -(abs(goal - here) + (not in_goal))
-        if self._near is not None and self._goal == goal:
+        goal_map = PATH[self.path][:2]
+        in_goal, goal = m == goal_map, ROAD_ORDER[goal_map]
+        self._here, self._away = here, abs(goal - here) + (not in_goal)
+        target = _DOORS.get(goal_map, float(goal))
+        rest = 0.0 if in_goal else 0.5
+        if in_goal and m == _LAB:  # up to Elm: the egg was handed over from (4, 2)
+            rest = 0.5 * min(1.0, (abs(self.read(X) - 4) + abs(self.read(Y) - 2)) / 12)
+        near = -(abs(target - position) + rest)
+        if self._near is not None and self._goal_step == self.path:
             self.shaping += COMPASS * (near - self._near)
-        self._near, self._goal = near, goal
+        self._near, self._goal, self._goal_step = near, goal, self.path
 
     def progress(self) -> dict[str, int]:
         gained = {k: self.best[k] - self.base[k] for k in self.base}

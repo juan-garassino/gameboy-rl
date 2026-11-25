@@ -36,7 +36,7 @@ def test_progress_is_rewarded(change, expected):
     s = SilverStats(ram.__getitem__)
     ram.update(change)
     s.observe()
-    assert s.value() == pytest.approx(expected)
+    assert s.base_value() == pytest.approx(expected)
 
 
 def _visit(ram, stats, *maps):
@@ -53,15 +53,14 @@ def test_the_story_path_pays_more_the_further_it_gets():
         if k in silver.NEEDS_FLAG:
             _story_flag(ram, silver.NEEDS_FLAG[k])
         _visit(ram, s, (group, number))
-        now = s.value() - s.story  # the egg flags pay on top of the steps
+        now = s.base_value() - s.story  # the egg flags pay on top of the steps
         gains.append(now - last)
         last = now
     assert s.progress()["path"] == len(silver.PATH) and gains == sorted(gains) and gains[0] >= 2.0
     _visit(ram, s, *[(g, n) for g, n, _ in silver.PATH], (24, 4))
-    walked_back = s.value() - s.story
-    assert walked_back - last <= silver.WEIGHTS["retraced"] * len(silver.PATH)  # a little, once
+    walked_back = s.base_value()
     _visit(ram, s, *[(g, n) for g, n, _ in silver.PATH], (24, 4))
-    assert s.value() - s.story == pytest.approx(walked_back)  # and then nothing
+    assert s.base_value() == pytest.approx(walked_back)  # the same ground again pays nothing
 
 
 def test_all_the_houses_in_town_pay_less_than_leaving_it():
@@ -79,26 +78,61 @@ def test_walking_the_story_roads_pays_ten_times_walking_around_town():
     s = SilverStats(ram.__getitem__)
     ram[silver.X] = 7
     s.observe()
-    town = s.value()
+    town = s.base_value()
     _visit(ram, s, (24, 3))
-    on_road = s.value()
+    on_road = s.base_value()
     ram[silver.X] = 8
     s.observe()
-    assert s.value() - on_road == pytest.approx(10 * town) and s.progress()["road_tile"] == 2
+    assert s.base_value() - on_road == pytest.approx(10 * town) and s.progress()["road_tile"] == 2
 
 
-def test_the_road_back_pays_a_little_after_each_step_but_only_once():
+def test_road_pays_once_per_step_and_only_toward_the_goal():
     ram = _ram()
-    s = SilverStats(ram.__getitem__)
-    _visit(ram, s, (24, 3))  # Route 29, step 1
-    _visit(ram, s, (26, 3), (26, 1))  # Cherrygrove, Route 30: two steps later
-    before, value = s.progress(), s.base_value()
-    _visit(ram, s, (24, 3))  # back on the same Route 29 tile
-    after = s.progress()
-    assert after["road_tile"] == before["road_tile"] and after["retraced"] == before["retraced"] + 1
-    assert s.base_value() - value == pytest.approx(silver.WEIGHTS["retraced"]) and silver.WEIGHTS["retraced"] * 400 < 8
-    _visit(ram, s, (24, 3))
-    assert s.progress()["retraced"] == after["retraced"]  # the same tile in the same step never pays twice
+    s = SilverStats(ram.__getitem__, path=4)  # practice: the egg in hand, in New Bark, memory of the road empty
+    ram[silver.X] = 5
+    s.observe()
+    before = s.base_value()
+    for x in range(59, 30, -1):  # the wrong way, back over all of Route 29
+        ram[silver.X] = x
+        _visit(ram, s, (24, 3))
+    tile = silver.WEIGHTS["tile"]
+    assert s.progress()["road_tile"] == 0 and s.base_value() - before < 0.1 + 30 * tile + 1e-9  # exploring pay only
+    assert s.shaping < -silver.COMPASS / 2  # and the compass takes more than that back
+
+    s = SilverStats(ram.__getitem__, path=4)  # practice again, now from Route 29: the right way pays every new tile once
+    for _ in range(2):
+        for x in range(31, 60):
+            ram[silver.X] = x
+            _visit(ram, s, (24, 3))
+        paid = s.progress()["road_tile"]
+        assert 27 <= paid <= 29
+    assert s.shaping > 0
+
+
+def test_inside_the_lab_the_compass_leads_to_elm():
+    ram = _ram()
+    ram[silver.MAP_NUMBER], ram[silver.X], ram[silver.Y] = 5, 4, 11
+    s = SilverStats(ram.__getitem__, path=4)
+    gains = []
+    for y in (9, 6, 2):
+        before, ram[silver.Y] = s.shaping, y
+        s.observe()
+        gains.append(s.shaping - before)
+    assert all(g > 0 for g in gains) and sum(gains) == pytest.approx(silver.COMPASS * 0.5 * 9 / 12)
+
+
+def test_the_compass_works_tile_by_tile_along_the_road():
+    along = [silver.road_position((24, 4), 13, 5), silver.road_position((24, 4), 0, 8), silver.road_position((24, 3), 59, 9),
+             silver.road_position((24, 3), 20, 9), silver.road_position((26, 3), 39, 7), silver.road_position((26, 3), 17, 0),
+             silver.road_position((26, 1), 6, 53), silver.road_position((26, 1), 6, 20), silver.road_position((26, 10), 3, 6),
+             silver.road_position((26, 2), 39, 9), silver.road_position((26, 2), 5, 9), silver.road_position((10, 5), 1, 1)]
+    assert along == sorted(along) and silver.road_position((24, 6), 1, 1) is None
+    ram = _ram()
+    ram[silver.MAP_NUMBER], ram[silver.X] = 3, 40
+    s = SilverStats(ram.__getitem__, path=1)  # goal Cherrygrove, west along Route 29
+    ram[silver.X] = 34
+    s.observe()
+    assert s.shaping == pytest.approx(silver.COMPASS * 6 / 60)
 
 
 def test_the_compass_pays_for_getting_closer_and_takes_it_back():
@@ -122,7 +156,7 @@ def test_the_compass_points_home_with_the_egg_and_never_counts_as_progress():
     _visit(ram, s, silver.PATH[3][:2])  # up to Mr. Pokemon's house: now Elm is the goal
     base = s.value() - s.shaping
     _visit(ram, s, (26, 1))  # Route 30, one map back toward home
-    assert s.value() - s.shaping == pytest.approx(base + 0.0, abs=0.06)  # no path pay for that, only a little retracing
+    assert s.value() - s.shaping == pytest.approx(base, abs=0.06)  # no path pay for that, only a road tile
     assert s.path == 4 and s.shaping > 0 and s.base_value() == pytest.approx(s.value() - s.shaping)
 
 
@@ -234,7 +268,7 @@ def test_the_egg_steps_count_only_when_the_game_says_so():
     assert s.away == 1 and s.shaping > with_egg
     town = s.shaping
     _visit(ram, s, (24, 5))  # inside the lab, egg not given: still the goal, and a step closer
-    assert s.path == 4 and s.away == 0 and s.shaping == pytest.approx(town + silver.COMPASS)
+    assert s.path == 4 and s.away == 0 and s.shaping > town + 1.0
     _visit(ram, s, (24, 4))
     assert s.path == 4 and s.shaping == pytest.approx(town)  # walking out again gives it back
     _visit(ram, s, (24, 5))
