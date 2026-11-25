@@ -6,7 +6,7 @@ import pytest
 from gymnasium.spaces import Discrete
 
 from gameboy_rl import silver
-from gameboy_rl.silver import DoNothingEarnsReward, SilverStats, play_episode, run_baselines
+from gameboy_rl.silver import DoNothingEarnsReward, SilverStats, StallClock, play_episode, run_baselines
 
 
 class _Ram(dict):
@@ -55,6 +55,21 @@ def test_battles_do_not_count_as_exploring():
     ram[silver.BATTLE_MODE], ram[silver.X] = 1, 40
     s.observe()
     assert s.value() == 0.0
+
+
+def test_stall_clock_ends_an_episode_only_after_a_dry_spell():
+    clock = StallClock(limit=3)
+    assert [clock.update(False), clock.update(False), clock.update(True)] == [False, False, False]
+    assert [clock.update(False), clock.update(False), clock.update(False)] == [False, False, True]
+
+
+def test_stall_limit_and_entropy_bonus_are_settings():
+    from gameboy_rl.config import Settings
+    from gameboy_rl.train import ppo_params
+
+    cfg = Settings(game="silver", stall_steps=7, ent_coef=0.02)
+    assert cfg.stall_steps == 7 and ppo_params(cfg)["ent_coef"] == 0.02
+    assert ppo_params(Settings())["ent_coef"] == 0.01  # Red keeps PWhiddy's
 
 
 def test_hp_fraction_is_big_endian():
