@@ -20,6 +20,7 @@ from stable_baselines3.common.vec_env import VecEnv
 
 from gameboy_rl.config import Settings
 from gameboy_rl.env import import_upstream, make_vec_env
+from gameboy_rl.graft import graft, needs_graft
 from gameboy_rl.monitoring import mlflow_tracking
 from gameboy_rl.monitoring.health import HealthCallback, HealthMonitor
 from gameboy_rl.monitoring.progress import ProgressCallback
@@ -59,7 +60,17 @@ def build_model(cfg: Settings, env: VecEnv) -> PPO:
 
 def load_model(path: Path, cfg: Settings, env: VecEnv) -> PPO:
     _size_torch_threads(cfg)
-    """Load a checkpoint and re-size its rollout buffer to this run's n_steps/n_envs (as baseline_fast_v2 does)."""
+    """Load a checkpoint and re-size its rollout buffer to this run's n_steps/n_envs (as baseline_fast_v2 does).
+
+    A checkpoint with fewer inputs than this run's game is grafted onto a fresh network (see graft.py)."""
+    if cfg.game == "silver":
+        old = PPO.load(path, device=cfg.device, custom_objects=SCHEDULE_OVERRIDES)
+        fresh = build_model(cfg, env)
+        if needs_graft(old, fresh):
+            graft(old, fresh)
+            fresh.num_timesteps = old.num_timesteps
+            logger.info("grafted %s inputs onto %s", sorted(set(fresh.observation_space.spaces) - set(old.observation_space.spaces)), path)
+            return fresh
     model = PPO.load(path, env=env, device=cfg.device, custom_objects=SCHEDULE_OVERRIDES)
     model.n_steps = cfg.n_steps
     model.n_envs = cfg.n_envs

@@ -14,6 +14,7 @@ import gymnasium as gym
 import numpy as np
 from gymnasium import spaces
 
+from gameboy_rl.achievements import BADGES, STORY, AchievementLog
 from gameboy_rl.config import Settings
 
 PLAYER_NAME, MAP_GROUP, MAP_NUMBER, Y, X = 0xD1A3, 0xDA00, 0xDA01, 0xDA02, 0xDA03
@@ -25,7 +26,10 @@ PARTY_COUNT, PARTY, MON_SIZE, EXP, LEVEL, HP, MAX_HP = 0xDA22, 0xDA2A, 0x30, 0x0
 BUTTONS = ["down", "left", "right", "up", "a", "b"]  # no START: menus and saving are not progress
 ACTION_FRAMES, PRESS_FRAMES = 24, 8
 FRAME_STACK = 3
-WEIGHTS = {"badge": 50.0, "event": 2.0, "map": 0.1, "caught": 1.0, "level": 2.0, "exp": 0.03, "tile": 0.005, "road_tile": 0.045, "retraced": 0.01}  # road_tile adds to tile
+# Story flags that mean real progress (numbers: achievements.STORY), in points. Other flags pay nothing.
+STORY_PAY = {30: 5.0, 31: 5.0, **{i: 30.0 for i in range(1213, 1221)}}
+HEAL_PAY, HEAL_MAX = 0.5, 3.0  # per full party restored outside battle, at most this much per game
+WEIGHTS = {"badge": 50.0, "story": 1.0, "healed": 1.0, "map": 0.1, "caught": 1.0, "level": 2.0, "exp": 0.03, "tile": 0.005, "road_tile": 0.045, "retraced": 0.01}  # road_tile adds to tile
 
 # The story's road to the first badge, from pret/pokegold's map_constants.asm. Each step pays more than the last.
 PATH: list[tuple[int, int, str]] = [
@@ -58,11 +62,16 @@ class SilverStats:
         self.read = read
         self.start_path = path
         self.tiles: set[tuple[int, int, int, int]] = set()
+        self.start_story = self._story()
+        self.story = 0.0
+        self.healed = 0.0
+        self._hp: tuple[float, int, int] | None = None  # (health, levels, party) when last seen outside battle
         self.maps: dict[tuple[int, int], None] = {}  # an ordered set: the order areas were reached in
         self.path = path
         self.road_tiles = 0  # new tiles on the PATH maps
         self.shaping = 0.0  # the compass: summed since the start, changes with the map, never counts as progress
         self._near: float | None = None
+        self._goal = self._here = 0
         self.retraced = 0  # old PATH tiles walked again after a later step of the path (each once per step)
         self.road_seen: set[tuple[int, int, int, int, int]] = set()
         self.base = self._raw()
@@ -80,9 +89,23 @@ class SilverStats:
                 "exp": sum(r(PARTY + i * MON_SIZE + EXP) << 16 | r(PARTY + i * MON_SIZE + EXP + 1) << 8
                            | r(PARTY + i * MON_SIZE + EXP + 2) for i in range(party))}
 
+    def _story(self) -> frozenset[int]:
+        return frozenset(i for i in STORY_PAY if self.read(EVENTS_START + i // 8) >> (i % 8) & 1)
+
+    def _watch_story_and_health(self) -> None:
+        new = self._story() - self.start_story
+        self.story = max(self.story, sum(STORY_PAY[i] for i in new))
+        if self.read(BATTLE_MODE) != 0:
+            return
+        now = (self.hp_fraction(), self.best["level"], min(self.read(PARTY_COUNT), 6))
+        if self._hp is not None and self._hp[0] > 0.001 and now[1:] == self._hp[1:] and now[0] - self._hp[0] > 0.2:
+            self.healed = min(HEAL_MAX, self.healed + HEAL_PAY * (now[0] - self._hp[0]))  # blackouts (from 0) and level-ups do not count
+        self._hp = now
+
     def observe(self) -> None:
         for k, v in self._raw().items():
             self.best[k] = max(self.best[k], v)
+        self._watch_story_and_health()
         if self.read(BATTLE_MODE) == 0:
             m = (self.read(MAP_GROUP), self.read(MAP_NUMBER))
             self.maps[m] = None
@@ -102,6 +125,7 @@ class SilverStats:
         here = ROAD_ORDER.get((self.read(MAP_GROUP), self.read(MAP_NUMBER)))
         if here is None or self.path >= len(PATH):
             return
+        self._here = here
         goal = ROAD_ORDER[PATH[self.path][:2]]
         near = -abs(goal - here)
         if self._near is not None and self._goal == goal:
@@ -111,7 +135,7 @@ class SilverStats:
     def progress(self) -> dict[str, int]:
         gained = {k: self.best[k] - self.base[k] for k in self.base}
         return {**gained, "map": len(self.maps) - self.start_maps, "tile": len(self.tiles) - self.start_tiles,
-                "road_tile": self.road_tiles - self.start_road_tiles, "retraced": self.retraced, "path": self.path}
+                "story": self.story, "healed": self.healed, "road_tile": self.road_tiles - self.start_road_tiles, "retraced": self.retraced, "path": self.path}
 
     def value(self) -> float:
         return self.base_value() + self.shaping
@@ -180,6 +204,9 @@ class Frontier:
         return io.BytesIO(self.state), self.path
 
 
+N_STORY = len(STORY) + len(BADGES) + len(PATH) + 1 + 1  # flags, badges, goal one-hot (with "done"), closeness
+
+
 class SilverEnv(gym.Env):
     metadata = {"render_modes": ["rgb_array"]}
 
@@ -198,6 +225,7 @@ class SilverEnv(gym.Env):
             "visited": spaces.Box(0, 255, (48, 48, 1), np.uint8),
             "state": spaces.Box(-1.0, 1.0, (10,), np.float32),
             "areas": spaces.Box(0.0, 1.0, (len(AREAS),), np.float32),  # which known areas this game has reached
+            "story": spaces.Box(0.0, 1.0, (N_STORY,), np.float32),  # what the game says has happened, and the next goal
             "recent_actions": spaces.MultiDiscrete([len(BUTTONS)] * FRAME_STACK),
         })
         self.stats: SilverStats | None = None
@@ -221,6 +249,7 @@ class SilverEnv(gym.Env):
         self.stats = SilverStats(self._read, path=further[1] if further else 0)
         self.value, self.base, self.steps = 0.0, 0.0, 0
         self.stall = StallClock(self.cfg.stall_steps)
+        self.log = AchievementLog(self.cfg.run_dir / "achievements", self._read)
         self.screens = np.zeros((72, 80, 3 * FRAME_STACK), np.uint8)
         self.recent = np.zeros(FRAME_STACK, np.int64)
         return self._obs(), {}
@@ -241,6 +270,8 @@ class SilverEnv(gym.Env):
         self.pyboy.tick(1, True)
         self.stats.observe()
         self.frontier.reached(self.pyboy, self.stats.path)
+        if self.cfg.frontier_prob > 0:  # training games only: evals are scored separately
+            self.log.update(self.stats.path, self.steps)
         self.recent = np.roll(self.recent, 1)
         self.recent[0] = action
         self.steps += 1
@@ -265,7 +296,16 @@ class SilverEnv(gym.Env):
                min(6, r(PARTY_COUNT)) / 6, s.path / len(PATH)]
         return {"screens": self.screens.copy(), "visited": visited,
                 "areas": np.array([m in s.maps for m in AREAS], np.float32),
+                "story": self._story_obs(),
                 "state": np.clip(np.array(vec, np.float32), -1, 1), "recent_actions": self.recent.copy()}
+
+    def _story_obs(self) -> np.ndarray:
+        s, r = self.stats, self._read
+        flags = [r(EVENTS_START + i // 8) >> (i % 8) & 1 for i in STORY]
+        badges = [r(JOHTO_BADGES) >> k & 1 for k in range(len(BADGES))]
+        goal = [float(s.path == k) for k in range(len(PATH) + 1)]
+        near = 1.0 - min(6, abs(s._goal - s._here)) / 6 if s._near is not None else 0.0
+        return np.array([*flags, *badges, *goal, near], np.float32)
 
     # ProgressCallback's interface (same names as PWhiddy's Red env)
     def get_badges(self) -> int:

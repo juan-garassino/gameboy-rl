@@ -5,7 +5,7 @@ import numpy as np
 import pytest
 from gymnasium.spaces import Discrete
 
-from gameboy_rl import silver
+from gameboy_rl import achievements, silver
 from gameboy_rl.silver import DoNothingEarnsReward, SilverStats, StallClock, play_episode, run_baselines
 
 
@@ -29,7 +29,7 @@ def test_doing_nothing_is_worth_nothing():
 
 
 @pytest.mark.parametrize("change,expected", [
-    ({silver.JOHTO_BADGES: 1}, 50.0), ({silver.EVENTS_START: 0b111}, 2.0), ({silver.CAUGHT_START: 1}, 1.0),
+    ({silver.JOHTO_BADGES: 1}, 50.0), ({silver.CAUGHT_START: 1}, 1.0),
     ({silver.PARTY + silver.LEVEL: 6}, 2.0), ({silver.X: 7}, 0.005), ({silver.MAP_NUMBER: 5}, 0.105)])
 def test_progress_is_rewarded(change, expected):
     ram = _ram()
@@ -121,6 +121,55 @@ def test_the_compass_points_home_with_the_egg_and_never_counts_as_progress():
     assert s.shaping > 0 and s.base_value() == pytest.approx(s.value() - s.shaping)
 
 
+def _story_flag(ram, i):
+    ram[silver.EVENTS_START + i // 8] = ram.get(silver.EVENTS_START + i // 8, 0) | 1 << (i % 8)
+
+
+def test_named_story_flags_pay_and_the_start_does_not():
+    ram = _ram()
+    _story_flag(ram, 30)  # already done at the start
+    s = SilverStats(ram.__getitem__)
+    s.observe()
+    assert s.base_value() == 0.0
+    _story_flag(ram, 31)
+    s.observe()
+    assert s.base_value() == pytest.approx(silver.STORY_PAY[31])
+    ram[silver.EVENTS_START + 31 // 8] = 0  # a flag that is cleared again does not pay twice or go negative
+    s.observe()
+    assert s.base_value() == pytest.approx(silver.STORY_PAY[31])
+
+
+def _hp(ram, hp, full=20):
+    ram[silver.PARTY + silver.HP + 1], ram[silver.PARTY + silver.MAX_HP + 1] = hp, full
+
+
+def test_healing_pays_a_little_up_to_a_cap_and_never_for_a_blackout_or_a_level_up():
+    ram = _ram()
+    _hp(ram, 20)
+    s = SilverStats(ram.__getitem__)
+    _hp(ram, 5)
+    s.observe()
+    _hp(ram, 20)
+    s.observe()
+    assert 0 < s.healed <= silver.HEAL_PAY
+    _hp(ram, 0)
+    s.observe()
+    _hp(ram, 20)  # woke up at home: from 0
+    s.observe()
+    before = s.healed
+    assert before == pytest.approx(silver.HEAL_PAY * 0.75)
+    for _ in range(40):
+        for hp in (4, 20):
+            _hp(ram, hp)
+            s.observe()
+    assert s.healed == pytest.approx(silver.HEAL_MAX)
+    _hp(ram, 4)
+    ram[silver.BATTLE_MODE] = 1
+    _hp(ram, 20)
+    s.observe()
+    assert s.healed == pytest.approx(silver.HEAL_MAX)
+
+
 def test_path_steps_must_be_reached_in_order():
     ram = _ram()
     s = SilverStats(ram.__getitem__)
@@ -135,7 +184,7 @@ def test_toggling_and_backtracking_cannot_be_farmed():
         for flags, x in ((0b111, 7), (0b101, 6)):
             ram[silver.EVENTS_START], ram[silver.X] = flags, x
             s.observe()
-    assert s.value() == pytest.approx(2.0 + 0.005)
+    assert s.base_value() == pytest.approx(0.005)  # an unnamed flag pays nothing, however often it toggles
 
 
 def test_winning_battles_pays_through_experience():
@@ -324,3 +373,29 @@ def test_silver_settings_and_dispatch():
 
     assert Settings().game == "red"
     assert Settings(game="silver").n_steps == Settings(game="silver").ep_length // 64
+
+
+def _flag(ram, i):
+    ram[achievements.EVENTS_START + i // 8] = ram.get(achievements.EVENTS_START + i // 8, 0) | 1 << (i % 8)
+
+
+def test_the_game_names_what_has_been_achieved():
+    ram = _Ram()
+    assert achievements.achieved(ram.__getitem__) == {}
+    _flag(ram, 30)
+    ram[achievements.JOHTO_BADGES] = 0b1
+    assert achievements.achieved(ram.__getitem__) == {"event_30": "got the Mystery Egg from Mr. Pokemon",
+                                                     "badge_Zephyr": "got the Zephyr Badge"}
+
+
+def test_each_achievement_is_logged_once_for_all_games_and_the_start_does_not_count(tmp_path):
+    ram = _Ram()
+    _flag(ram, 26)  # the start state already has it
+    a, b = (achievements.AchievementLog(tmp_path, ram.__getitem__) for _ in range(2))
+    assert a.update(0, 10) == []
+    _flag(ram, 30)
+    assert a.update(4, 900) == ["got the Mystery Egg from Mr. Pokemon"]
+    assert b.update(4, 950) == []  # another process did it second
+    import json
+    saved = json.loads((tmp_path / "event_30.json").read_text())
+    assert saved["path_step"] == 4 and saved["game_steps"] == 900
