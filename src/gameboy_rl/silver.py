@@ -23,7 +23,20 @@ PARTY_COUNT, PARTY, MON_SIZE, LEVEL, HP, MAX_HP = 0xDA22, 0xDA2A, 0x30, 0x1F, 0x
 BUTTONS = ["down", "left", "right", "up", "a", "b"]  # no START: menus and saving are not progress
 ACTION_FRAMES, PRESS_FRAMES = 24, 8
 FRAME_STACK = 3
-WEIGHTS = {"badge": 20.0, "event": 2.0, "map": 1.0, "caught": 1.0, "level": 0.5, "tile": 0.01}
+WEIGHTS = {"badge": 20.0, "event": 2.0, "map": 0.1, "caught": 1.0, "level": 0.5, "tile": 0.01}
+
+# The story's road to the first badge, from pret/pokegold's map_constants.asm. Each step pays more than the last.
+PATH: list[tuple[int, int, str]] = [
+    (24, 3, "Route 29"), (26, 3, "Cherrygrove City"), (26, 1, "Route 30"), (26, 10, "Mr. Pokemon's house"),
+    (26, 2, "Route 31"), (10, 5, "Violet City"), (10, 7, "Violet Gym"),
+]
+PATH_REWARDS = [3.0 + i for i in range(len(PATH))]
+AREAS: dict[tuple[int, int], str] = {
+    (24, 4): "New Bark Town", (24, 5): "Elm's lab", (24, 6): "player's house 1F", (24, 7): "player's house 2F",
+    (24, 8): "neighbor's house", (24, 9): "Elm's house", (24, 2): "Route 27",
+    (24, 13): "Route 29-46 gate", (5, 9): "Route 46", (26, 4): "Cherrygrove Mart", (26, 5): "Cherrygrove Pokecenter",
+    (26, 7): "guide gent's house", **{(g, n): name for g, n, name in PATH},
+}
 
 Read = Callable[[int], int]
 
@@ -38,7 +51,8 @@ class SilverStats:
     def __init__(self, read: Read):
         self.read = read
         self.tiles: set[tuple[int, int, int, int]] = set()
-        self.maps: set[tuple[int, int]] = set()
+        self.maps: dict[tuple[int, int], None] = {}  # an ordered set: the order areas were reached in
+        self.path = 0
         self.base = self._raw()
         self.best = dict(self.base)
         self.observe()
@@ -56,15 +70,22 @@ class SilverStats:
             self.best[k] = max(self.best[k], v)
         if self.read(BATTLE_MODE) == 0:
             m = (self.read(MAP_GROUP), self.read(MAP_NUMBER))
-            self.maps.add(m)
+            self.maps[m] = None
+            if self.path < len(PATH) and m == PATH[self.path][:2]:
+                self.path += 1
             self.tiles.add((*m, self.read(X), self.read(Y)))
 
     def progress(self) -> dict[str, int]:
         gained = {k: self.best[k] - self.base[k] for k in self.base}
-        return {**gained, "map": len(self.maps) - self.start_maps, "tile": len(self.tiles) - self.start_tiles}
+        return {**gained, "map": len(self.maps) - self.start_maps, "tile": len(self.tiles) - self.start_tiles,
+                "path": self.path}
 
     def value(self) -> float:
-        return sum(WEIGHTS[k] * v for k, v in self.progress().items())
+        p = self.progress()
+        return sum(w * p[k] for k, w in WEIGHTS.items()) + sum(PATH_REWARDS[:self.path])
+
+    def areas(self) -> list[str]:
+        return [AREAS.get(m, f"map {m[0]}.{m[1]}") for m in self.maps]
 
     def hp_fraction(self) -> float:
         hp = full = 0
@@ -102,7 +123,8 @@ class SilverEnv(gym.Env):
         self.observation_space = spaces.Dict({
             "screens": spaces.Box(0, 255, (72, 80, 3 * FRAME_STACK), np.uint8),
             "visited": spaces.Box(0, 255, (48, 48, 1), np.uint8),
-            "state": spaces.Box(-1.0, 1.0, (9,), np.float32),
+            "state": spaces.Box(-1.0, 1.0, (10,), np.float32),
+            "areas": spaces.Box(0.0, 1.0, (len(AREAS),), np.float32),  # which known areas this game has reached
             "recent_actions": spaces.MultiDiscrete([len(BUTTONS)] * FRAME_STACK),
         })
         self.stats: SilverStats | None = None
@@ -159,8 +181,9 @@ class SilverEnv(gym.Env):
                 visited[w:w + 2, c:c + 2] = 255
         vec = [s.hp_fraction(), min(1.0, s.best["level"] / 100), min(1.0, s.best["badge"] / 16),
                float(r(BATTLE_MODE) > 0), group / 32, number / 32, min(1.0, x / 64), min(1.0, y / 64),
-               min(6, r(PARTY_COUNT)) / 6]
+               min(6, r(PARTY_COUNT)) / 6, s.path / len(PATH)]
         return {"screens": self.screens.copy(), "visited": visited,
+                "areas": np.array([m in s.maps for m in AREAS], np.float32),
                 "state": np.clip(np.array(vec, np.float32), -1, 1), "recent_actions": self.recent.copy()}
 
     # ProgressCallback's interface (same names as PWhiddy's Red env)
@@ -204,10 +227,18 @@ def play_episode(env, steps: int, choose: Callable[[dict], int | None], heartbea
     return {"return": total, **{k: float(v) for k, v in info["progress"].items()}}
 
 
-def run_baselines(env, steps: int, heartbeat: Callable[[], None] | None = None) -> dict[str, float]:
-    nothing = play_episode(env, steps, lambda obs: None, heartbeat)
+def play_episodes(env, steps: int, episodes: int, choose: Callable[[dict], int | None],
+                  heartbeat: Callable[[], None] | None = None, frames: list | None = None) -> dict[str, float]:
+    """Mean stats over several games (best path too); frames, when given, record the first game."""
+    runs = [play_episode(env, steps, choose, heartbeat, frames if i == 0 else None) for i in range(episodes)]
+    mean = {k: float(np.mean([r[k] for r in runs])) for k in runs[0]}
+    return {**mean, "path_best": max(r["path"] for r in runs), "episodes": float(episodes)}
+
+
+def run_baselines(env, steps: int, heartbeat: Callable[[], None] | None = None, episodes: int = 1) -> dict[str, float]:
+    nothing = play_episodes(env, steps, episodes, lambda obs: None, heartbeat)
     if nothing["return"] > 0:
         raise DoNothingEarnsReward(f"doing nothing earned {nothing['return']}: {nothing}")
-    random = play_episode(env, steps, lambda obs: int(env.action_space.sample()), heartbeat)
+    random = play_episodes(env, steps, episodes, lambda obs: int(env.action_space.sample()), heartbeat)
     return {**{f"baseline/nothing_{k}": v for k, v in nothing.items()},
             **{f"baseline/random_{k}": v for k, v in random.items()}}

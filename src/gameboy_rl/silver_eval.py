@@ -12,7 +12,7 @@ from stable_baselines3.common.callbacks import BaseCallback
 
 from gameboy_rl.config import Settings
 from gameboy_rl.monitoring import mlflow_tracking
-from gameboy_rl.silver import SilverEnv, play_episode, run_baselines
+from gameboy_rl.silver import SilverEnv, play_episodes, run_baselines
 
 logger = logging.getLogger(__name__)
 VIDEO_FPS = 8  # one agent step = 0.4 s of game, so ~3x real speed
@@ -30,7 +30,7 @@ class SilverEvalCallback(BaseCallback):
         if not path.exists():
             env = self.env_factory(self.cfg)
             try:
-                out = run_baselines(env, self.cfg.eval_steps, self.heartbeat)
+                out = run_baselines(env, self.cfg.eval_steps, self.heartbeat, self.cfg.eval_episodes)
             finally:
                 env.close()
             path.write_text(json.dumps(out, indent=2))
@@ -47,7 +47,8 @@ class SilverEvalCallback(BaseCallback):
         steps, frames = self.model.num_timesteps, []
         env = self.env_factory(self.cfg)
         try:
-            stats = play_episode(env, self.cfg.eval_steps, self._choose, self.heartbeat, frames)
+            stats = play_episodes(env, self.cfg.eval_steps, self.cfg.eval_episodes, self._choose, self.heartbeat, frames)
+            areas = env.stats.areas()  # of the last game, in the order reached
         finally:
             env.close()
         video = self.run_dir / "videos" / f"eval_{steps:010d}.mp4"
@@ -55,7 +56,8 @@ class SilverEvalCallback(BaseCallback):
         imageio.mimwrite(str(video), frames, fps=VIDEO_FPS, macro_block_size=16, format="FFMPEG")
         mlflow_tracking.log_artifact(video, "videos")
         mlflow_tracking.log_metrics({f"eval/{k}": v for k, v in stats.items()}, step=steps)
-        logger.info("eval @%d: %s", steps, stats)
+        logger.info("eval @%d: %s areas=%s", steps, stats, areas)
+        mlflow_tracking.set_tag("last_eval_areas", " > ".join(areas))
         return stats
 
     def _on_step(self) -> bool:

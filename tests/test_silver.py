@@ -30,13 +30,49 @@ def test_doing_nothing_is_worth_nothing():
 
 @pytest.mark.parametrize("change,expected", [
     ({silver.JOHTO_BADGES: 1}, 20.0), ({silver.EVENTS_START: 0b111}, 2.0), ({silver.CAUGHT_START: 1}, 1.0),
-    ({silver.PARTY + silver.LEVEL: 6}, 0.5), ({silver.X: 7}, 0.01), ({silver.MAP_NUMBER: 3}, 1.01)])
+    ({silver.PARTY + silver.LEVEL: 6}, 0.5), ({silver.X: 7}, 0.01), ({silver.MAP_NUMBER: 5}, 0.11)])
 def test_progress_is_rewarded(change, expected):
     ram = _ram()
     s = SilverStats(ram.__getitem__)
     ram.update(change)
     s.observe()
     assert s.value() == pytest.approx(expected)
+
+
+def _visit(ram, stats, *maps):
+    for group, number in maps:
+        ram[silver.MAP_GROUP], ram[silver.MAP_NUMBER] = group, number
+        stats.observe()
+
+
+def test_the_story_path_pays_more_the_further_it_gets():
+    ram = _ram()
+    s = SilverStats(ram.__getitem__)
+    gains, last = [], 0.0
+    for group, number, _ in silver.PATH:
+        _visit(ram, s, (group, number))
+        gains.append(s.value() - last)
+        last = s.value()
+    assert s.progress()["path"] == len(silver.PATH) and gains == sorted(gains) and gains[0] >= 2.0
+    _visit(ram, s, *[(g, n) for g, n, _ in silver.PATH], (24, 4))
+    assert s.value() == pytest.approx(last)  # walking back pays nothing
+
+
+def test_all_the_houses_in_town_pay_less_than_leaving_it():
+    ram = _ram()
+    s = SilverStats(ram.__getitem__)
+    _visit(ram, s, (24, 5), (24, 6), (24, 7), (24, 8), (24, 9))
+    houses = s.value()
+    _visit(ram, s, (24, 3))
+    assert s.value() - houses > houses
+    assert s.areas()[-1] == "Route 29"
+
+
+def test_path_steps_must_be_reached_in_order():
+    ram = _ram()
+    s = SilverStats(ram.__getitem__)
+    _visit(ram, s, (26, 10))
+    assert s.progress()["path"] == 0
 
 
 def test_toggling_and_backtracking_cannot_be_farmed():
@@ -108,6 +144,19 @@ def test_baselines_compare_nothing_and_random():
 def test_refuses_to_train_when_doing_nothing_pays():
     with pytest.raises(DoNothingEarnsReward):
         run_baselines(_StubEnv(idle_reward=0.01), steps=5)
+
+
+def test_baselines_average_several_games():
+    class _Env(_StubEnv):
+        games = 0
+
+        def reset(self):
+            self.games += 1
+            return {}, {}
+
+    env = _Env()
+    out = run_baselines(env, steps=5, episodes=4)
+    assert env.games == 8 and out["baseline/random_episodes"] == 4
 
 
 def test_play_episode_records_color_frames():
