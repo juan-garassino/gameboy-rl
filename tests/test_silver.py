@@ -98,6 +98,16 @@ def test_toggling_and_backtracking_cannot_be_farmed():
     assert s.value() == pytest.approx(2.0 + 0.005)
 
 
+def test_winning_battles_pays_through_experience():
+    ram = _ram()
+    ram[silver.PARTY + silver.EXP + 2] = 135
+    s = SilverStats(ram.__getitem__)
+    assert s.value() == 0.0
+    ram[silver.PARTY + silver.EXP + 1], ram[silver.PARTY + silver.EXP + 2] = 1, 0  # 256: big-endian, 3 bytes
+    s.observe()
+    assert s.progress()["exp"] == 121 and s.value() == pytest.approx(121 * silver.WEIGHTS["exp"])
+
+
 def test_battles_do_not_count_as_exploring():
     ram = _ram()
     s = SilverStats(ram.__getitem__)

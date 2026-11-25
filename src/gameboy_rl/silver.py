@@ -18,12 +18,12 @@ PLAYER_NAME, MAP_GROUP, MAP_NUMBER, Y, X = 0xD1A3, 0xDA00, 0xDA01, 0xDA02, 0xDA0
 JOHTO_BADGES, KANTO_BADGES, BATTLE_MODE = 0xD57C, 0xD57D, 0xD116
 EVENTS_START, EVENTS_END = 0xD7B7, 0xD8B7
 CAUGHT_START, CAUGHT_END = 0xDBE4, 0xDC04
-PARTY_COUNT, PARTY, MON_SIZE, LEVEL, HP, MAX_HP = 0xDA22, 0xDA2A, 0x30, 0x1F, 0x22, 0x24
+PARTY_COUNT, PARTY, MON_SIZE, EXP, LEVEL, HP, MAX_HP = 0xDA22, 0xDA2A, 0x30, 0x08, 0x1F, 0x22, 0x24
 
 BUTTONS = ["down", "left", "right", "up", "a", "b"]  # no START: menus and saving are not progress
 ACTION_FRAMES, PRESS_FRAMES = 24, 8
 FRAME_STACK = 3
-WEIGHTS = {"badge": 50.0, "event": 2.0, "map": 0.1, "caught": 1.0, "level": 0.5, "tile": 0.005, "road_tile": 0.045}  # road_tile adds to tile
+WEIGHTS = {"badge": 50.0, "event": 2.0, "map": 0.1, "caught": 1.0, "level": 0.5, "exp": 0.01, "tile": 0.005, "road_tile": 0.045}  # road_tile adds to tile
 
 # The story's road to the first badge, from pret/pokegold's map_constants.asm. Each step pays more than the last.
 PATH: list[tuple[int, int, str]] = [
@@ -67,7 +67,9 @@ class SilverStats:
         party = min(r(PARTY_COUNT), 6)
         return {"badge": _bits(r, JOHTO_BADGES, KANTO_BADGES + 1), "event": _bits(r, EVENTS_START, EVENTS_END),
                 "caught": _bits(r, CAUGHT_START, CAUGHT_END),
-                "level": sum(r(PARTY + i * MON_SIZE + LEVEL) for i in range(party))}
+                "level": sum(r(PARTY + i * MON_SIZE + LEVEL) for i in range(party)),
+                "exp": sum(r(PARTY + i * MON_SIZE + EXP) << 16 | r(PARTY + i * MON_SIZE + EXP + 1) << 8
+                           | r(PARTY + i * MON_SIZE + EXP + 2) for i in range(party))}
 
     def observe(self) -> None:
         for k, v in self._raw().items():
