@@ -160,6 +160,16 @@ def test_no_tile_but_the_way_on_is_where_the_compass_rests(path, m, size, best):
     assert s.path == path and {tile for tile, v in score.items() if v > top - 1e-9} <= best
 
 
+@pytest.mark.parametrize("room", [(24, 5), (26, 10)])
+def test_inside_a_room_every_tile_has_a_step_toward_the_door(room):
+    dist = silver._TO_DOOR[room]
+    assert set(dist) == silver._WALKABLE[room]  # every tile reaches the door
+    for (x, y), d in dist.items():
+        if d:
+            assert any(dist.get(n, 99) == d - 1 for n in ((x + 1, y), (x - 1, y), (x, y + 1), (x, y - 1)))
+    assert dist[(9, 5)] > dist[(4, 5)] if room == (24, 5) else True  # behind the table is farther than the aisle
+
+
 def test_inside_the_lab_the_compass_leads_to_elm():
     ram = _ram()
     ram[silver.MAP_NUMBER], ram[silver.X], ram[silver.Y] = 5, 4, 11

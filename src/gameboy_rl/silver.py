@@ -44,6 +44,26 @@ COMPASS = 3.0  # paid per map closer to the next goal (and in part per tile), ta
 _LAB, _HOUSE = (24, 5), (26, 10)  # Elm's, Mr. Pokemon's
 _DOORS = {_LAB: 0.45, _HOUSE: 3.89}  # where those two doors stand along the road
 _EXITS = {_LAB: (4, 11), _HOUSE: (2, 7)}  # the tile inside each room by its door
+# Where you can stand in each room, found by walking it at random in the game. Straight-line distance to the door left a
+# pocket behind the Poké Ball table that looked farther from the door the way out; walking distance has none.
+_WALKABLE = {
+    _LAB: {(0, 3), (0, 4), (0, 5), (1, 3), (1, 4), (1, 5), (1, 8), (2, 2), (2, 3), (2, 4), (2, 5), (2, 8), (3, 2), (3, 3), (3, 4), (3, 5), (3, 8), (3, 9), (3, 10), (3, 11), (4, 1), (4, 2), (4, 3), (4, 4), (4, 5), (4, 6), (4, 7), (4, 8), (4, 9), (4, 10), (4, 11), (5, 1), (5, 3), (5, 4), (5, 5), (5, 6), (5, 7), (5, 8), (5, 9), (5, 10), (5, 11), (6, 4), (6, 5), (6, 8), (6, 9), (6, 10), (7, 4), (7, 5), (7, 8), (7, 9), (7, 10), (7, 11), (8, 4), (8, 5), (8, 8), (8, 9), (8, 10), (8, 11), (9, 4), (9, 5), (9, 8), (9, 9), (9, 10), (9, 11)},
+    _HOUSE: {(0, 2), (0, 3), (0, 4), (0, 5), (1, 2), (1, 3), (1, 4), (1, 5), (1, 6), (1, 7), (2, 2), (2, 3), (2, 4), (2, 5), (2, 6), (2, 7), (3, 2), (3, 3), (3, 4), (3, 6), (3, 7), (4, 2), (4, 3), (4, 6), (4, 7), (5, 2), (5, 3), (5, 6), (5, 7), (6, 2), (6, 3), (6, 5), (6, 6), (6, 7), (7, 2), (7, 5), (7, 6), (7, 7)},
+}
+
+
+def _walking_distances(room: tuple[int, int]) -> dict[tuple[int, int], int]:
+    tiles, door = _WALKABLE[room], _EXITS[room]
+    dist, todo = {door: 0}, [door]
+    for x, y in todo:  # breadth first: the list grows while we walk it
+        for n in ((x + 1, y), (x - 1, y), (x, y + 1), (x, y - 1)):
+            if n in tiles and n not in dist:
+                dist[n] = dist[(x, y)] + 1
+                todo.append(n)
+    return dist
+
+
+_TO_DOOR = {room: _walking_distances(room) for room in _WALKABLE}
 _DOOR_TILES = {_LAB: ((24, 4), 6, 3, 20), _HOUSE: ((26, 1), 17, 5, 66)}  # outside: (map, x, y, tiles that count as one map)
 
 
@@ -186,7 +206,8 @@ class SilverStats:
         rest = 0.0 if in_goal else 0.5
         if m in _EXITS and not in_goal:  # in a room the goal is not in: out through its door (after the egg, games stayed by Elm)
             ex, ey = _EXITS[m]
-            rest += 0.15 * (abs(self.read(X) - ex) + abs(self.read(Y) - ey)) / 12
+            x, y = self.read(X), self.read(Y)
+            rest += 0.15 * _TO_DOOR[m].get((x, y), abs(x - ex) + abs(y - ey) + 6) / 12
         if in_goal and m == _LAB:  # up to Elm: the egg was handed over from (4, 2)
             rest = 0.5 * min(1.0, (abs(self.read(X) - 4) + abs(self.read(Y) - 2)) / 12)
         far = abs(target - position)
