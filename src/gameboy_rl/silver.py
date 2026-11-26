@@ -5,7 +5,9 @@ The reward pays only for game progress a player would recognise, so doing nothin
 """
 from __future__ import annotations
 
+import functools
 import io
+import json
 import os
 from pathlib import Path
 from typing import Callable
@@ -68,6 +70,62 @@ def _walking_distances(room: tuple[int, int]) -> dict[tuple[int, int], int]:
 
 
 _TO_DOOR = {room: _walking_distances(room) for room in _WALKABLE}
+
+# The road maps, flooded in the emulator after the egg was given (silver_maps.json: walkable tiles, one-tile moves, exits).
+# Distances on them follow the real path: on Route 30 the way to Route 31 is a U-turn past a trainer, and measured by height
+# alone the top right (by Mr. Pokemon's house) looked closest; every game stopped there.
+_MAPS = {tuple(map(int, k.split("."))): v for k, v in json.loads((Path(__file__).parent / "silver_maps.json").read_text()).items()}
+_ORDER = {**ROAD_ORDER, _LAB: -1}  # the lab lies off New Bark, one step past it on the way home
+_ROAD_MAPS = {(24, 4), (24, 3), (26, 3), (26, 1), (26, 2), (10, 5)}
+_OUTSIDE = {_LAB: ((24, 4), (6, 4)), _HOUSE: ((26, 1), (17, 6)), (24, 6): ((24, 4), (13, 6))}  # a room's door, seen from outside
+
+
+@functools.lru_cache(maxsize=None)
+def _to_exit(m: tuple[int, int], target: tuple[int, int]) -> tuple[dict[tuple[int, int], int], int] | None:
+    """Walking distance on map m to the tiles that lead into map `target`, and the largest such distance."""
+    data = _MAPS.get(m)
+    exits = [tuple(e[0]) for e in data["exits"] if tuple(e[2]) == target] if data else []
+    if not exits:
+        return None
+    moves = {(tuple(a), tuple(b)) for a, b in data["moves"]}
+    leaves = {a for a, _ in moves}
+    moves |= {(b, a) for a, b in moves if b not in leaves}  # tiles the flood could not leave (a trainer in sight): walk back
+    back: dict[tuple[int, int], list[tuple[int, int]]] = {}
+    for a, b in moves:
+        back.setdefault(b, []).append(a)
+    dist, todo = {e: 0 for e in exits}, list(exits)
+    for p in todo:
+        for a in back.get(p, []):
+            if a not in dist:
+                dist[a] = dist[p] + 1
+                todo.append(a)
+    return dist, max(dist.values()) or 1
+
+
+def walking_far(m: tuple[int, int], x: int, y: int, goal_map: tuple[int, int]) -> float | None:
+    """Maps still to cross to reach goal_map, counting this one by walking distance; None where the map data does not help."""
+    if m in _OUTSIDE and m != goal_map:  # in a room that is not the goal: from its door outside, plus the way to that door
+        om, (ox, oy) = _OUTSIDE[m]
+        outside = walking_far(om, ox, oy, goal_map)
+        if outside is None:
+            return None
+        inside = _TO_DOOR[m].get((x, y), 12) if m in _TO_DOOR else abs(x - 6) + abs(y - 7)
+        return outside + 0.15 * (inside + 1) / 12
+    if m not in _MAPS or goal_map not in _ORDER or m not in _ORDER:
+        return None
+    exits = {tuple(e[2]) for e in _MAPS[m]["exits"]}
+    if goal_map in exits:
+        step = goal_map
+    else:
+        toward = [c for c in exits if c in _ROAD_MAPS and c in _ORDER and abs(_ORDER[goal_map] - _ORDER[c]) < abs(_ORDER[goal_map] - _ORDER[m])]
+        if not toward:
+            return None
+        step = min(toward, key=lambda c: abs(_ORDER[goal_map] - _ORDER[c]))
+    found = _to_exit(m, step)
+    if found is None or (x, y) not in found[0]:
+        return None
+    dist, longest = found
+    return dist[(x, y)] / longest + max(0, abs(_ORDER[goal_map] - _ORDER[m]) - 1)
 _DOOR_TILES = {_LAB: ((24, 4), 6, 3, 20), _HOUSE: ((26, 1), 17, 5, 66)}  # outside: (map, x, y, tiles that count as one map)
 
 
@@ -236,7 +294,8 @@ class SilverStats:
             rest += 0.15 * _TO_DOOR[m].get((x, y), abs(x - ex) + abs(y - ey) + 6) / 12
         if in_goal and m == _LAB:  # up to Elm: the egg was handed over from (4, 2)
             rest = 0.5 * min(1.0, (abs(self.read(X) - 4) + abs(self.read(Y) - 2)) / 12)
-        far = abs(target - position)
+        walked = None if in_goal else walking_far(m, self.read(X), self.read(Y), goal_map)
+        far = abs(target - position) if walked is None else walked
         if goal_map in _DOOR_TILES and m == _DOOR_TILES[goal_map][0]:  # on the door's own map: walk to the door itself
             _, dx, dy, scale = _DOOR_TILES[goal_map]
             far = (abs(self.read(X) - dx) + abs(self.read(Y) - dy)) / scale

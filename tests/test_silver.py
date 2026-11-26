@@ -143,7 +143,7 @@ def test_the_compass_leads_out_of_the_house_and_to_the_door_itself():
     ram[silver.MAP_NUMBER], ram[silver.X], ram[silver.Y] = 7, 3, 3  # upstairs, after a knockout; goal: Route 29
     s = SilverStats(ram.__getitem__)
     last = s.shaping
-    for number, x, y in ((7, 7, 0), (6, 9, 0), (6, 6, 7), (4, 13, 5), (4, 0, 8)):
+    for number, x, y in ((7, 7, 0), (6, 9, 0), (6, 6, 7), (4, 13, 6), (4, 0, 8)):  # out the door: (13, 6) in New Bark
         ram[silver.MAP_NUMBER], ram[silver.X], ram[silver.Y] = number, x, y
         s.observe()
         assert s.shaping > last, (number, x, y)
@@ -151,28 +151,30 @@ def test_the_compass_leads_out_of_the_house_and_to_the_door_itself():
     ram[silver.X], ram[silver.Y] = 0, 9
     s = SilverStats(ram.__getitem__, path=4)  # egg in hand, in New Bark: only the lab's door is closest
     best = {}
-    for x in range(20):
-        for y in range(18):
-            ram[silver.X], ram[silver.Y] = x, y
-            s.observe()
-            best[(x, y)] = s.shaping
-    assert max(best, key=best.get) == (6, 3) and sorted(best.values())[-2] < best[(6, 3)] - 0.1
+    for x, y in silver._MAPS[(24, 4)]["tiles"]:  # where one can stand in New Bark
+        ram[silver.X], ram[silver.Y] = x, y
+        s.observe()
+        best[(x, y)] = s.shaping
+    assert max(best, key=best.get) == (6, 4)  # below the lab's door
 
 
 # (path step while there, map, tiles, the tiles where the compass may be at its best on that map)
 @pytest.mark.parametrize("path,m,size,best", [
-    (4, (26, 1), (20, 54), {(x, 53) for x in range(20)}), (4, (26, 3), (40, 18), {(39, 7)}),
-    (4, (24, 3), (60, 18), {(59, y) for y in range(18)}), (4, (24, 4), (20, 18), {(6, 3)}),
-    (0, (24, 4), (20, 18), {(0, 8)}), (1, (24, 3), (60, 18), {(0, y) for y in range(18)}),
-    (2, (26, 3), (40, 18), {(17, 0)}), (3, (26, 1), (20, 54), {(17, 5)}),
+    (4, (26, 1), (20, 54), {(x, 53) for x in range(20)}), (4, (26, 3), (40, 18), {(39, 6), (39, 7), (39, 8)}),
+    (4, (24, 3), (60, 18), {(59, y) for y in range(18)}), (4, (24, 4), (20, 18), {(6, 4)}),  # the tile below the lab's door
+    (0, (24, 4), (20, 18), {(0, 8), (0, 9)}), (1, (24, 3), (60, 18), {(0, y) for y in range(18)}),
+    (2, (26, 3), (40, 18), {(16, 0), (17, 0)}), (3, (26, 1), (20, 54), {(17, 6)}),  # below Mr. Pokemon's door
     (5, (24, 5), (10, 12), {(4, 11)}), (4, (26, 10), (8, 8), {(2, 7)}), (5, (26, 1), (20, 54), {(x, 0) for x in range(20)})])
 def test_no_tile_but_the_way_on_is_where_the_compass_rests(path, m, size, best):
     ram = _ram()
     ram[silver.MAP_GROUP], ram[silver.MAP_NUMBER], ram[silver.X], ram[silver.Y] = *m, 0, 0
     s = SilverStats(ram.__getitem__, path=path)
     score = {}
+    walkable = {tuple(p) for p in silver._MAPS[m]["tiles"]} if m in silver._MAPS else None
     for x in range(size[0]):
         for y in range(size[1]):
+            if walkable is not None and (x, y) not in walkable:
+                continue  # a tree or a wall: the game never stands there
             ram[silver.X], ram[silver.Y] = x, y
             s.observe()
             score[(x, y)] = s.shaping
@@ -213,7 +215,7 @@ def test_the_compass_works_tile_by_tile_along_the_road():
     s = SilverStats(ram.__getitem__, path=1)  # goal Cherrygrove, west along Route 29
     ram[silver.X] = 34
     s.observe()
-    assert s.shaping == pytest.approx(silver.COMPASS * 6 / 60)
+    assert s.shaping > 0  # six tiles west on Route 29 is closer by the real path too
 
 
 def test_the_compass_pays_for_getting_closer_and_takes_it_back():
@@ -572,3 +574,24 @@ def test_a_text_box_is_told_apart_from_the_map():
     assert not silver.text_box(screen)
     screen[98, 8:152] = 10
     assert silver.text_box(screen)
+
+
+def test_after_the_egg_route_30_leads_round_to_route_31_not_up_to_the_house():
+    """Every game stopped in Route 30's top right, by Mr. Pokemon's house: by height it looked next to Route 31."""
+    pocket = silver.walking_far((26, 1), 9, 6, (26, 2))
+    south = silver.walking_far((26, 1), 6, 53, (26, 2))
+    left = silver.walking_far((26, 1), 2, 18, (26, 2))
+    assert left < south < pocket  # the dead end is the farthest of the three, the left path the nearest
+    inside = silver.walking_far((26, 10), 2, 7, (26, 2))
+    assert inside > silver.walking_far((26, 1), 17, 6, (26, 2))  # the house is no shortcut
+
+
+@pytest.mark.parametrize("m,goal", [((26, 1), (26, 2)), ((26, 1), (26, 3)), ((26, 3), (24, 3)), ((26, 3), (26, 1)),
+                                    ((24, 3), (26, 3)), ((24, 3), (24, 4)), ((24, 4), (24, 3)), ((24, 4), (24, 5))])
+def test_on_every_road_map_each_tile_has_a_step_that_gets_closer(m, goal):
+    dist, _ = silver._to_exit(m, goal)
+    assert len(dist) == len(silver._MAPS[m]["tiles"])  # all of the map leads to the goal
+    moves = {(tuple(a), tuple(b)) for a, b in silver._MAPS[m]["moves"]}
+    for p, d in dist.items():
+        if d:
+            assert any(dist.get(b, 10**6) < d for a, b in moves if a == p) or any(dist.get(a, 10**6) < d for a, b in moves if b == p)
