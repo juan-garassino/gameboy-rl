@@ -31,16 +31,19 @@ class Settings(BaseSettings):
     n_envs: int = 32  # GBRL_N_ENVS=32 (~ pod vCPUs)
     ep_length: int = 2048 * 80  # GBRL_EP_LENGTH=163840 (agent steps per episode; PPO n_steps = ep_length // 64)
     seed: int = 0  # GBRL_SEED=0
+    device: str = "auto"  # GBRL_DEVICE=mps (Apple GPU; auto = NVIDIA or CPU)
     ckpt_freq: int = 5_000_000  # GBRL_CKPT_FREQ=5000000 (each checkpoint, ~15 MB, is also uploaded to MLflow)
     keep_ckpts: int = 3  # GBRL_KEEP_CKPTS=3
     runs_dir: Path = Path("runs")  # GBRL_RUNS_DIR=/workspace/runs
     resume_from: Path | None = None  # GBRL_RESUME_FROM=/workspace/init/poke_26214400.zip (when no run ckpt yet)
     eval_episodes: int = 3  # GBRL_EVAL_EPISODES=3 (silver: games per eval and per baseline; one game proves nothing)
     stall_steps: int = 1024  # GBRL_STALL_STEPS=1024 (silver: dry steps that end a game, × (1 + path steps reached))
+    click_text: bool = True  # GBRL_CLICK_TEXT=false (silver: outside battle, text boxes are clicked through by the env)
     frontier_prob: float = 0.5  # GBRL_FRONTIER_PROB=0.5 (silver: share of games starting at the furthest point reached)
-    ent_coef: float = 0.01  # GBRL_ENT_COEF=0.02 (silver: a stuck policy needs more exploration than Red's 0.01)
+    n_epochs: int = 1  # GBRL_N_EPOCHS=3 (silver: with 1 pass per batch it stayed near-random, entropy 1.65-1.75 of 1.79)
+    ent_coef: float = 0.01  # GBRL_ENT_COEF=0.01 (0.02 kept Silver near-random; StallClock now handles being stuck)
     eval_freq: int = 500_000  # GBRL_EVAL_FREQ=500000 (silver: color video + outcome stats)
-    eval_steps: int = 4096  # GBRL_EVAL_STEPS=4096 (agent steps per eval/baseline game at most, ~27 min; a stalled game ends)
+    eval_steps: int = 10_000  # GBRL_EVAL_STEPS=10000 (agent steps per eval game at most; at 4096 no game had time to bring the egg back)
     stream: bool = False  # GBRL_STREAM=true (broadcasts coords to PWhiddy's PUBLIC map; off for privacy)
     stream_user: str = "gameboy-rl"  # GBRL_STREAM_USER=gameboy-rl (name shown on the public map)
     stop_on_critical: bool = True  # GBRL_STOP_ON_CRITICAL=false

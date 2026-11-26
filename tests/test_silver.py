@@ -5,7 +5,7 @@ import numpy as np
 import pytest
 from gymnasium.spaces import Discrete
 
-from gameboy_rl import silver
+from gameboy_rl import achievements, silver
 from gameboy_rl.silver import DoNothingEarnsReward, SilverStats, StallClock, play_episode, run_baselines
 
 
@@ -29,14 +29,14 @@ def test_doing_nothing_is_worth_nothing():
 
 
 @pytest.mark.parametrize("change,expected", [
-    ({silver.JOHTO_BADGES: 1}, 50.0), ({silver.EVENTS_START: 0b111}, 2.0), ({silver.CAUGHT_START: 1}, 1.0),
-    ({silver.PARTY + silver.LEVEL: 6}, 0.5), ({silver.X: 7}, 0.005), ({silver.MAP_NUMBER: 5}, 0.105)])
+    ({silver.JOHTO_BADGES: 1}, 50.0), ({silver.CAUGHT_START: 1}, 1.0),
+    ({silver.PARTY + silver.LEVEL: 6}, 1.5), ({silver.X: 7}, 0.005), ({silver.MAP_NUMBER: 5}, 0.105)])
 def test_progress_is_rewarded(change, expected):
     ram = _ram()
     s = SilverStats(ram.__getitem__)
     ram.update(change)
     s.observe()
-    assert s.value() == pytest.approx(expected)
+    assert s.base_value() == pytest.approx(expected)
 
 
 def _visit(ram, stats, *maps):
@@ -49,13 +49,18 @@ def test_the_story_path_pays_more_the_further_it_gets():
     ram = _ram()
     s = SilverStats(ram.__getitem__)
     gains, last = [], 0.0
-    for group, number, _ in silver.PATH:
+    for k, (group, number, _) in enumerate(silver.PATH):
+        if k in silver.NEEDS_FLAG:
+            _story_flag(ram, silver.NEEDS_FLAG[k])
         _visit(ram, s, (group, number))
-        gains.append(s.value() - last)
-        last = s.value()
+        now = s.base_value() - s.story  # the egg flags pay on top of the steps
+        gains.append(now - last)
+        last = now
     assert s.progress()["path"] == len(silver.PATH) and gains == sorted(gains) and gains[0] >= 2.0
     _visit(ram, s, *[(g, n) for g, n, _ in silver.PATH], (24, 4))
-    assert s.value() == pytest.approx(last)  # walking back pays nothing
+    walked_back = s.base_value()
+    _visit(ram, s, *[(g, n) for g, n, _ in silver.PATH], (24, 4))
+    assert s.base_value() == pytest.approx(walked_back)  # the same ground again pays nothing
 
 
 def test_all_the_houses_in_town_pay_less_than_leaving_it():
@@ -73,12 +78,218 @@ def test_walking_the_story_roads_pays_ten_times_walking_around_town():
     s = SilverStats(ram.__getitem__)
     ram[silver.X] = 7
     s.observe()
-    town = s.value()
+    town = s.base_value()
     _visit(ram, s, (24, 3))
-    on_road = s.value()
+    on_road = s.base_value()
     ram[silver.X] = 8
     s.observe()
-    assert s.value() - on_road == pytest.approx(10 * town) and s.progress()["road_tile"] == 2
+    assert s.base_value() - on_road == pytest.approx(10 * town) and s.progress()["road_tile"] == 2
+
+
+def test_road_pays_once_per_step_and_only_toward_the_goal():
+    ram = _ram()
+    s = SilverStats(ram.__getitem__, path=4)  # practice: the egg in hand, in New Bark, memory of the road empty
+    ram[silver.X] = 5
+    s.observe()
+    before = s.base_value()
+    for x in range(59, 30, -1):  # the wrong way, back over all of Route 29
+        ram[silver.X] = x
+        _visit(ram, s, (24, 3))
+    tile = silver.WEIGHTS["tile"]
+    assert s.progress()["road_tile"] == 0 and s.base_value() - before < 0.1 + 30 * tile + 1e-9  # exploring pay only
+    assert s.shaping < -silver.COMPASS / 2  # and the compass takes more than that back
+
+    s = SilverStats(ram.__getitem__, path=4)  # practice again, now from Route 29: the right way pays every new tile once
+    for _ in range(2):
+        for x in range(31, 60):
+            ram[silver.X] = x
+            _visit(ram, s, (24, 3))
+        paid = s.progress()["road_tile"]
+        assert 27 <= paid <= 29
+    assert s.shaping > 0
+
+
+def test_fighting_pays_up_to_the_gym_and_no_further():
+    ram = _ram()
+    s = SilverStats(ram.__getitem__, path=4)
+    ram[silver.PARTY + silver.LEVEL] = 30  # far past what Falkner needs
+    ram[silver.PARTY + silver.EXP + 1] = 40  # about 10,000 experience
+    s.observe()
+    most = (silver.LEVEL_TARGET - 5) * silver.WEIGHTS["level"] + 10_240 * silver.WEIGHTS["exp"]
+    assert s.base_value() == pytest.approx(most)
+    assert most + silver.WINS_PAID * silver.WEIGHTS["won"] < silver.WEIGHTS["badge"] + silver.STORY_PAY[1213]
+
+
+def test_a_battle_won_pays_and_running_away_does_not():
+    ram = _ram()
+    s = SilverStats(ram.__getitem__)
+    for exp in (None, None):  # a battle, then out of it with nothing gained: ran away
+        ram[silver.BATTLE_MODE] = 1
+        s.observe()
+        ram[silver.BATTLE_MODE] = 0
+        s.observe()
+    assert s.won == 0
+    ram[silver.BATTLE_MODE] = 1
+    s.observe()
+    ram[silver.PARTY + silver.EXP + 2] = 60  # the enemy fainted
+    s.observe()
+    ram[silver.BATTLE_MODE] = 0
+    s.observe()
+    assert s.won == 1 and s.progress()["won"] == 1
+
+
+def test_the_compass_leads_out_of_the_house_and_to_the_door_itself():
+    ram = _ram()
+    ram[silver.MAP_NUMBER], ram[silver.X], ram[silver.Y] = 7, 3, 3  # upstairs, after a knockout; goal: Route 29
+    s = SilverStats(ram.__getitem__)
+    last = s.shaping
+    for number, x, y in ((7, 7, 0), (6, 9, 0), (6, 6, 7), (4, 13, 6), (4, 0, 8)):  # out the door: (13, 6) in New Bark
+        ram[silver.MAP_NUMBER], ram[silver.X], ram[silver.Y] = number, x, y
+        s.observe()
+        assert s.shaping > last, (number, x, y)
+        last = s.shaping
+    ram[silver.X], ram[silver.Y] = 0, 9
+    s = SilverStats(ram.__getitem__, path=4)  # egg in hand, in New Bark: only the lab's door is closest
+    best = {}
+    for x, y in silver._MAPS[(24, 4)]["tiles"]:  # where one can stand in New Bark
+        ram[silver.X], ram[silver.Y] = x, y
+        s.observe()
+        best[(x, y)] = s.shaping
+    assert max(best, key=best.get) == (6, 4)  # below the lab's door
+
+
+# (path step while there, map, tiles, the tiles where the compass may be at its best on that map)
+@pytest.mark.parametrize("path,m,size,best", [
+    (4, (26, 1), (20, 54), {(x, 53) for x in range(20)}), (4, (26, 3), (40, 18), {(39, 6), (39, 7), (39, 8)}),
+    (4, (24, 3), (60, 18), {(59, y) for y in range(18)}), (4, (24, 4), (20, 18), {(6, 4)}),  # the tile below the lab's door
+    (0, (24, 4), (20, 18), {(0, 8), (0, 9)}), (1, (24, 3), (60, 18), {(0, y) for y in range(18)}),
+    (2, (26, 3), (40, 18), {(16, 0), (17, 0)}), (3, (26, 1), (20, 54), {(17, 6)}),  # below Mr. Pokemon's door
+    (5, (24, 5), (10, 12), {(4, 11)}), (4, (26, 10), (8, 8), {(2, 7)}), (5, (26, 1), (20, 54), {(x, 0) for x in range(20)})])
+def test_no_tile_but_the_way_on_is_where_the_compass_rests(path, m, size, best):
+    ram = _ram()
+    ram[silver.MAP_GROUP], ram[silver.MAP_NUMBER], ram[silver.X], ram[silver.Y] = *m, 0, 0
+    s = SilverStats(ram.__getitem__, path=path)
+    score = {}
+    walkable = {tuple(p) for p in silver._MAPS[m]["tiles"]} if m in silver._MAPS else None
+    for x in range(size[0]):
+        for y in range(size[1]):
+            if walkable is not None and (x, y) not in walkable:
+                continue  # a tree or a wall: the game never stands there
+            ram[silver.X], ram[silver.Y] = x, y
+            s.observe()
+            score[(x, y)] = s.shaping
+    top = max(score.values())
+    assert s.path == path and {tile for tile, v in score.items() if v > top - 1e-9} <= best
+
+
+@pytest.mark.parametrize("room", [(24, 5), (26, 10)])
+def test_inside_a_room_every_tile_has_a_step_toward_the_door(room):
+    dist = silver._TO_DOOR[room]
+    assert set(dist) == silver._WALKABLE[room]  # every tile reaches the door
+    for (x, y), d in dist.items():
+        if d:
+            assert any(dist.get(n, 99) == d - 1 for n in ((x + 1, y), (x - 1, y), (x, y + 1), (x, y - 1)))
+    assert dist[(9, 5)] > dist[(4, 5)] if room == (24, 5) else True  # behind the table is farther than the aisle
+
+
+def test_inside_the_lab_the_compass_leads_to_elm():
+    ram = _ram()
+    ram[silver.MAP_NUMBER], ram[silver.X], ram[silver.Y] = 5, 4, 11
+    s = SilverStats(ram.__getitem__, path=4)
+    gains = []
+    for y in (9, 6, 2):
+        before, ram[silver.Y] = s.shaping, y
+        s.observe()
+        gains.append(s.shaping - before)
+    assert all(g > 0 for g in gains) and sum(gains) == pytest.approx(silver.COMPASS * 0.5 * 9 / 12)
+
+
+def test_the_compass_works_tile_by_tile_along_the_road():
+    along = [silver.road_position((24, 4), 13, 5), silver.road_position((24, 4), 0, 8), silver.road_position((24, 3), 59, 9),
+             silver.road_position((24, 3), 20, 9), silver.road_position((26, 3), 39, 7), silver.road_position((26, 3), 17, 0),
+             silver.road_position((26, 1), 6, 53), silver.road_position((26, 1), 6, 20), silver.road_position((26, 10), 3, 6),
+             silver.road_position((26, 2), 39, 9), silver.road_position((26, 2), 5, 9), silver.road_position((10, 5), 1, 1)]
+    assert along == sorted(along) and silver.road_position((24, 8), 1, 1) is None
+    ram = _ram()
+    ram[silver.MAP_NUMBER], ram[silver.X] = 3, 40
+    s = SilverStats(ram.__getitem__, path=1)  # goal Cherrygrove, west along Route 29
+    ram[silver.X] = 34
+    s.observe()
+    assert s.shaping > 0  # six tiles west on Route 29 is closer by the real path too
+
+
+def test_the_compass_pays_for_getting_closer_and_takes_it_back():
+    ram = _ram()
+    s = SilverStats(ram.__getitem__)
+    start = s.shaping
+    _visit(ram, s, (24, 3))  # Route 29: step 1 reached, so the goal becomes Cherrygrove
+    at_29 = s.shaping
+    _visit(ram, s, (24, 4))  # walks back home
+    home = s.shaping
+    _visit(ram, s, (24, 3), (24, 4), (24, 3))  # and wanders to and fro
+    assert home < at_29 and s.shaping == pytest.approx(at_29)  # loops cancel: nothing to farm
+    assert s.progress()["path"] == 1 and start == 0
+
+
+def test_the_compass_points_home_with_the_egg_and_never_counts_as_progress():
+    ram = _ram()
+    s = SilverStats(ram.__getitem__)
+    _visit(ram, s, *[(g, n) for g, n, _ in silver.PATH[:3]])
+    _story_flag(ram, 30)
+    _visit(ram, s, silver.PATH[3][:2])  # up to Mr. Pokemon's house: now Elm is the goal
+    base = s.value() - s.shaping
+    _visit(ram, s, (26, 1))  # Route 30, one map back toward home
+    assert s.value() - s.shaping == pytest.approx(base, abs=0.06)  # no path pay for that, only a road tile
+    assert s.path == 4 and s.shaping > 0 and s.base_value() == pytest.approx(s.value() - s.shaping)
+
+
+def _story_flag(ram, i):
+    ram[silver.EVENTS_START + i // 8] = ram.get(silver.EVENTS_START + i // 8, 0) | 1 << (i % 8)
+
+
+def test_named_story_flags_pay_and_the_start_does_not():
+    ram = _ram()
+    _story_flag(ram, 30)  # already done at the start
+    s = SilverStats(ram.__getitem__)
+    s.observe()
+    assert s.base_value() == 0.0
+    _story_flag(ram, 31)
+    s.observe()
+    assert s.base_value() == pytest.approx(silver.STORY_PAY[31])
+    ram[silver.EVENTS_START + 31 // 8] = 0  # a flag that is cleared again does not pay twice or go negative
+    s.observe()
+    assert s.base_value() == pytest.approx(silver.STORY_PAY[31])
+
+
+def _hp(ram, hp, full=20):
+    ram[silver.PARTY + silver.HP + 1], ram[silver.PARTY + silver.MAX_HP + 1] = hp, full
+
+
+def test_healing_pays_a_little_up_to_a_cap_and_never_for_a_blackout_or_a_level_up():
+    ram = _ram()
+    _hp(ram, 20)
+    s = SilverStats(ram.__getitem__)
+    _hp(ram, 5)
+    s.observe()
+    _hp(ram, 20)
+    s.observe()
+    assert 0 < s.healed <= silver.HEAL_PAY
+    _hp(ram, 0)
+    s.observe()
+    _hp(ram, 20)  # woke up at home: from 0
+    s.observe()
+    before = s.healed
+    assert before == pytest.approx(silver.HEAL_PAY * 0.75)
+    for _ in range(40):
+        for hp in (4, 20):
+            _hp(ram, hp)
+            s.observe()
+    assert s.healed == pytest.approx(silver.HEAL_MAX)
+    _hp(ram, 4)
+    ram[silver.BATTLE_MODE] = 1
+    _hp(ram, 20)
+    s.observe()
+    assert s.healed == pytest.approx(silver.HEAL_MAX)
 
 
 def test_path_steps_must_be_reached_in_order():
@@ -95,7 +306,17 @@ def test_toggling_and_backtracking_cannot_be_farmed():
         for flags, x in ((0b111, 7), (0b101, 6)):
             ram[silver.EVENTS_START], ram[silver.X] = flags, x
             s.observe()
-    assert s.value() == pytest.approx(2.0 + 0.005)
+    assert s.base_value() == pytest.approx(0.005)  # an unnamed flag pays nothing, however often it toggles
+
+
+def test_winning_battles_pays_through_experience():
+    ram = _ram()
+    ram[silver.PARTY + silver.EXP + 2] = 135
+    s = SilverStats(ram.__getitem__)
+    assert s.value() == 0.0
+    ram[silver.PARTY + silver.EXP + 1], ram[silver.PARTY + silver.EXP + 2] = 1, 0  # 256: big-endian, 3 bytes
+    s.observe()
+    assert s.progress()["exp"] == 121 and s.value() == pytest.approx(121 * silver.WEIGHTS["exp"])
 
 
 def test_battles_do_not_count_as_exploring():
@@ -117,6 +338,29 @@ def test_a_game_that_got_further_is_given_more_time():
     assert [clock.update(False, patience=2) for _ in range(6)] == [False, False, False, False, False, True]
 
 
+def test_the_egg_steps_count_only_when_the_game_says_so():
+    ram = _ram()
+    s = SilverStats(ram.__getitem__)
+    _visit(ram, s, *[(g, n) for g, n, _ in silver.PATH[:4]])  # inside Mr. Pokemon's house, no egg yet
+    assert s.path == 3 and s.away == 0
+    _story_flag(ram, 30)
+    s.observe()
+    assert s.path == 4  # got the egg: now Elm
+    with_egg = s.shaping
+    _visit(ram, s, (26, 1), (26, 3), (24, 3), (24, 4))
+    assert s.away == 1 and s.shaping > with_egg
+    town = s.shaping
+    _visit(ram, s, (24, 5))  # inside the lab, egg not given: still the goal, and a step closer
+    assert s.path == 4 and s.away == 0 and s.shaping > town + 1.0
+    _visit(ram, s, (24, 4))
+    assert s.path == 4 and s.shaping == pytest.approx(town)  # walking out again gives it back
+    _visit(ram, s, (24, 5))
+    before = s.base_value()
+    _story_flag(ram, 31)
+    s.observe()
+    assert s.path == 5 and s.base_value() - before == pytest.approx(silver.PATH_REWARDS[4] + silver.STORY_PAY[31])
+
+
 def test_the_path_goes_back_to_elm_with_the_egg():
     names = [name for _, _, name in silver.PATH]
     assert names.index("Mr. Pokemon's house") + 1 == names.index("Elm's lab (egg)") < names.index("Route 31")
@@ -135,14 +379,42 @@ class _Boy:
         f.write(b"cherrygrove")
 
 
-def test_frontier_remembers_the_furthest_point_and_replays_it():
+def test_processes_share_the_points_any_of_them_reached(tmp_path):
+    a, b = silver.Frontier(tmp_path), silver.Frontier(tmp_path)
+    a.reached(_Boy(), 3, 2)
+    state, path = b.pick(np.random.default_rng(0), prob=1.0)
+    assert state.read() == b"cherrygrove" and path == 3
+    b.reached(None, 3, 2)  # known already: the emulator is not even asked
+    b.reached(_Boy(), 3, 1)
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["path_03_away_01.state", "path_03_away_02.state"]
+
+
+def test_the_shared_points_are_not_written_by_games_that_may_not_start_there(tmp_path):
+    f = silver.Frontier(tmp_path, share=False)
+    f.reached(_Boy(), 2, 1)
+    assert not list(tmp_path.iterdir())
+
+
+def test_the_goal_already_reached_does_not_hide_the_way_to_it():
+    f = silver.Frontier()
+    f.reached(_Boy(), 4, 0)  # a state in the lab with the egg
+    f.reached(_Boy(), 4, 5)  # the egg just got, far from home: worth practising too
+    assert set(f.states) == {(4, 0), (4, 5)}
+
+
+def test_every_path_step_gets_the_same_share_of_practice():
     f = silver.Frontier()
     assert f.pick(np.random.default_rng(0), prob=1.0) is None  # nothing reached yet: normal start
-    f.reached(_Boy(), 2)
-    f.reached(None, 1)  # not further: ignored, the emulator is not even asked
-    state, path = f.pick(np.random.default_rng(0), prob=1.0)
-    assert state.read() == b"cherrygrove" and path == 2
-    assert f.pick(np.random.default_rng(0), prob=0.0) is None
+    f.reached(_Boy(), 0, 3)  # home is the normal start
+    f.reached(_Boy(), 2, None)  # no idea how far: skip
+    assert not f.states
+    for path, away in ((2, 2), (4, 5), (4, 4), (4, 3)):
+        f.reached(_Boy(), path, away)
+    f.reached(None, 4, 5)  # known already
+    rng = np.random.default_rng(0)
+    paths = [f.pick(rng, prob=1.0)[1] for _ in range(400)]
+    assert 0.42 < paths.count(2) / 400 < 0.58  # one point against three, but one step against one
+    assert f.pick(rng, prob=0.0) is None
 
 
 def test_stall_limit_and_entropy_bonus_are_settings():
@@ -151,7 +423,8 @@ def test_stall_limit_and_entropy_bonus_are_settings():
 
     cfg = Settings(game="silver", stall_steps=7, ent_coef=0.02)
     assert cfg.stall_steps == 7 and ppo_params(cfg)["ent_coef"] == 0.02
-    assert ppo_params(Settings())["ent_coef"] == 0.01  # Red keeps PWhiddy's
+    assert ppo_params(Settings())["ent_coef"] == 0.01 and ppo_params(Settings())["n_epochs"] == 1  # Red keeps PWhiddy's
+    assert ppo_params(Settings(game="silver", n_epochs=3))["n_epochs"] == 3
 
 
 def test_hp_fraction_is_big_endian():
@@ -257,3 +530,84 @@ def test_silver_settings_and_dispatch():
 
     assert Settings().game == "red"
     assert Settings(game="silver").n_steps == Settings(game="silver").ep_length // 64
+
+
+def _flag(ram, i):
+    ram[achievements.EVENTS_START + i // 8] = ram.get(achievements.EVENTS_START + i // 8, 0) | 1 << (i % 8)
+
+
+def test_the_game_names_what_has_been_achieved():
+    ram = _Ram()
+    assert achievements.achieved(ram.__getitem__) == {}
+    _flag(ram, 30)
+    ram[achievements.JOHTO_BADGES] = 0b1
+    assert achievements.achieved(ram.__getitem__) == {"event_30": "got the Mystery Egg from Mr. Pokemon",
+                                                     "badge_Zephyr": "got the Zephyr Badge"}
+
+
+def test_each_achievement_is_logged_once_for_all_games_and_the_start_does_not_count(tmp_path):
+    ram = _Ram()
+    _flag(ram, 26)  # the start state already has it
+    a, b = (achievements.AchievementLog(tmp_path, ram.__getitem__) for _ in range(2))
+    assert a.update(0, 10) == []
+    _flag(ram, 30)
+    assert a.update(4, 900) == ["got the Mystery Egg from Mr. Pokemon"]
+    assert b.update(4, 950) == []  # another process did it second
+    import json
+    saved = json.loads((tmp_path / "event_30.json").read_text())
+    assert saved["path_step"] == 4 and saved["game_steps"] == 900
+
+
+def test_a_check_counts_games_per_story_step():
+    from gameboy_rl.check import summary
+
+    g = {"steps": 100, "level": 8, "badges": 0, "house_steps": 10}
+    s = summary([{**g, "path": 4}, {**g, "path": 5, "badges": 1}, {**g, "path": 2}])
+    assert s["got to"]["Mr. Pokemon's house"] == 2 and s["got to"]["Elm's lab (egg)"] == 1 and s["got to"]["Route 31"] == 0
+    assert s["badges"] == 1 and s["share of steps in the player's house"] == pytest.approx(0.1)
+
+
+def test_a_text_box_is_told_apart_from_the_map():
+    screen = np.full((144, 160, 4), 90, np.uint8)  # a map: mid tones
+    assert not silver.text_box(screen)
+    screen[104:136, 8:152] = 255  # a white box, no border yet
+    assert not silver.text_box(screen)
+    screen[98, 8:152] = 10
+    assert silver.text_box(screen)
+
+
+def test_after_the_egg_route_30_leads_round_to_route_31_not_up_to_the_house():
+    """Every game stopped in Route 30's top right, by Mr. Pokemon's house: by height it looked next to Route 31."""
+    pocket = silver.walking_far((26, 1), 9, 6, (26, 2))
+    south = silver.walking_far((26, 1), 6, 53, (26, 2))
+    left = silver.walking_far((26, 1), 2, 18, (26, 2))
+    assert left < south < pocket  # the dead end is the farthest of the three, the left path the nearest
+    inside = silver.walking_far((26, 10), 2, 7, (26, 2))
+    assert inside > silver.walking_far((26, 1), 17, 6, (26, 2))  # the house is no shortcut
+
+
+@pytest.mark.parametrize("m,goal", [((26, 1), (26, 2)), ((26, 1), (26, 3)), ((26, 3), (24, 3)), ((26, 3), (26, 1)),
+                                    ((24, 3), (26, 3)), ((24, 3), (24, 4)), ((24, 4), (24, 3)), ((24, 4), (24, 5))])
+def test_on_every_road_map_each_tile_has_a_step_that_gets_closer(m, goal):
+    dist, _ = silver._to_exit(m, goal)
+    assert len(dist) == len(silver._MAPS[m]["tiles"])  # all of the map leads to the goal
+    moves = {(tuple(a), tuple(b)) for a, b in silver._MAPS[m]["moves"]}
+    for p, d in dist.items():
+        if d:
+            assert any(dist.get(b, 10**6) < d for a, b in moves if a == p) or any(dist.get(a, 10**6) < d for a, b in moves if b == p)
+
+
+def test_the_compass_leads_to_the_gym_door_and_then_to_falkner():
+    door = [tuple(e[0]) for e in silver._MAPS[(10, 5)]["exits"] if tuple(e[2]) == silver._GYM][0]
+    far_away = silver.walking_far((10, 5), 36, 24, silver._GYM)
+    assert silver.walking_far((10, 5), *door, silver._GYM) == 0 < far_away
+    ram = _ram()
+    ram[silver.MAP_GROUP], ram[silver.MAP_NUMBER], ram[silver.X], ram[silver.Y] = 10, 7, 4, 15
+    s = SilverStats(ram.__getitem__, path=len(silver.PATH))  # in the gym: the road is done
+    start = s.shaping
+    for y in (13, 10, 6, 2):
+        ram[silver.Y] = y
+        s.observe()
+    ram[silver.X] = 5
+    s.observe()
+    assert s.shaping - start == pytest.approx(silver.COMPASS * 0.5 * 14 / 14) and s.base_value() < 0.1  # only new tiles

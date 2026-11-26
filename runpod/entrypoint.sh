@@ -65,7 +65,7 @@ if [ "${GBRL_GAME:-red}" = silver ]; then
     ROM_SHA1="${ROM_SHA1-49b163f7e57702bc939d642a18f591de55d92dae}"
     STATE_NAME="claude_totodile.state"
     INIT_CKPT="${INIT_CKPT-}"  # RunPod drops empty env values: Red's checkpoint must not be Silver's default
-    export GBRL_EP_LENGTH="${GBRL_EP_LENGTH:-32768}" GBRL_CKPT_FREQ="${GBRL_CKPT_FREQ:-500000}" GBRL_ENT_COEF="${GBRL_ENT_COEF:-0.02}" GBRL_EVAL_FREQ="${GBRL_EVAL_FREQ:-1000000}"
+    export GBRL_EP_LENGTH="${GBRL_EP_LENGTH:-32768}" GBRL_CKPT_FREQ="${GBRL_CKPT_FREQ:-500000}" GBRL_ENT_COEF="${GBRL_ENT_COEF:-0.01}" GBRL_N_EPOCHS="${GBRL_N_EPOCHS:-3}" GBRL_EVAL_FREQ="${GBRL_EVAL_FREQ:-1000000}"
 else
     ROM_NAME="pokemon_red_version.gb"
     INIT_CKPT="${INIT_CKPT-poke_26214400.zip}"

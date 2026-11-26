@@ -60,3 +60,11 @@ def test_n_envs_must_be_even():
     # v2/tensorboard_callback.py rearranges the explore maps into 2 rows: an odd n_envs crashes at episode end.
     with pytest.raises(ValueError):
         Settings(n_envs=3)
+
+
+def test_device_is_auto_unless_set(monkeypatch):
+    from gameboy_rl.config import Settings
+
+    assert Settings().device == "auto"
+    monkeypatch.setenv("GBRL_DEVICE", "mps")
+    assert Settings().device == "mps"

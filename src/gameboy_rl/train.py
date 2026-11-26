@@ -20,6 +20,7 @@ from stable_baselines3.common.vec_env import VecEnv
 
 from gameboy_rl.config import Settings
 from gameboy_rl.env import import_upstream, make_vec_env
+from gameboy_rl.graft import graft, needs_graft
 from gameboy_rl.monitoring import mlflow_tracking
 from gameboy_rl.monitoring.health import HealthCallback, HealthMonitor
 from gameboy_rl.monitoring.progress import ProgressCallback
@@ -29,11 +30,11 @@ logger = logging.getLogger(__name__)
 # baseline_fast_v2.py: PPO("MultiInputPolicy", env, n_steps=ep_length // 64, batch_size=512, n_epochs=1,
 #                          gamma=0.997, ent_coef=0.01); learning_rate / clip_range are SB3's defaults.
 LEARNING_RATE, CLIP_RANGE = 3e-4, 0.2
-PPO_PARAMS = dict(batch_size=512, n_epochs=1, gamma=0.997, learning_rate=LEARNING_RATE, clip_range=CLIP_RANGE)
+PPO_PARAMS = dict(batch_size=512, gamma=0.997, learning_rate=LEARNING_RATE, clip_range=CLIP_RANGE)
 
 
 def ppo_params(cfg: Settings) -> dict:
-    return {**PPO_PARAMS, "ent_coef": cfg.ent_coef}
+    return {**PPO_PARAMS, "ent_coef": cfg.ent_coef, "n_epochs": cfg.n_epochs}
 
 
 # Checkpoints carry cloudpickled schedule lambdas; PWhiddy's (Python 3.11 bytecode) segfault when called on 3.12.
@@ -54,19 +55,38 @@ def _size_torch_threads(cfg: Settings) -> None:
 
 def build_model(cfg: Settings, env: VecEnv) -> PPO:
     _size_torch_threads(cfg)
-    return PPO("MultiInputPolicy", env, n_steps=cfg.n_steps, seed=cfg.seed, verbose=0, **ppo_params(cfg))
+    return PPO("MultiInputPolicy", env, n_steps=cfg.n_steps, seed=cfg.seed, device=cfg.device, verbose=0, **ppo_params(cfg))
 
 
 def load_model(path: Path, cfg: Settings, env: VecEnv) -> PPO:
     _size_torch_threads(cfg)
-    """Load a checkpoint and re-size its rollout buffer to this run's n_steps/n_envs (as baseline_fast_v2 does)."""
-    model = PPO.load(path, env=env, custom_objects=SCHEDULE_OVERRIDES)
+    """Load a checkpoint and re-size its rollout buffer to this run's n_steps/n_envs (as baseline_fast_v2 does).
+
+    A checkpoint with fewer inputs than this run's game is grafted onto a fresh network (see graft.py)."""
+    if cfg.game == "silver":
+        old = PPO.load(path, device=cfg.device, custom_objects=SCHEDULE_OVERRIDES)
+        fresh = build_model(cfg, env)
+        if needs_graft(old, fresh):
+            graft(old, fresh)
+            fresh.num_timesteps = old.num_timesteps
+            logger.info("grafted %s inputs onto %s", sorted(set(fresh.observation_space.spaces) - set(old.observation_space.spaces)), path)
+            return fresh
+    model = PPO.load(path, env=env, device=cfg.device, custom_objects=SCHEDULE_OVERRIDES)
     model.n_steps = cfg.n_steps
     model.n_envs = cfg.n_envs
     model.rollout_buffer.buffer_size = cfg.n_steps
     model.rollout_buffer.n_envs = cfg.n_envs
     model.rollout_buffer.reset()
+    keep_counters_on_cpu(model)
     return model
+
+
+def keep_counters_on_cpu(model: PPO) -> None:
+    """Loading a checkpoint puts Adam's step counters on the GPU, and reading each one back there makes every weight
+    update wait: 8.1 ms instead of 1.3 ms on Apple's GPU."""
+    for state in model.policy.optimizer.state.values():
+        if torch.is_tensor(state.get("step")):
+            state["step"] = state["step"].cpu()
 
 
 class TrackingUnavailable(RuntimeError):
