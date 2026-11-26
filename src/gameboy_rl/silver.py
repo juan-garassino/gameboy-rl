@@ -361,14 +361,28 @@ class SilverEnv(gym.Env):
 
     def step(self, action):
         button = BUTTONS[int(action)]
+        before = self._where()
         self.pyboy.button_press(button)
         self.pyboy.tick(PRESS_FRAMES, False)
         self.pyboy.button_release(button)
+        self._bumped = button in ("down", "left", "right", "up") and self._read(BATTLE_MODE) == 0 and self._where() == before
         return self._advance(int(action), ACTION_FRAMES - PRESS_FRAMES)
+
+    def _where(self) -> tuple[int, int, int, int]:
+        return self._read(MAP_GROUP), self._read(MAP_NUMBER), self._read(X), self._read(Y)
 
     def _click_through_text(self) -> None:
         """Outside battle a text box freezes the player until it is clicked through (the aide's scene after the egg
         took about 30 presses and stopped every game): press A for it, so the network is not asked while it cannot act."""
+        if self.cfg.click_text and getattr(self, "_bumped", False) and self._where() == self._where_before_tick:
+            # Walked into someone or something and did not move: talk to it. After the egg the officer stands in the lab's
+            # aisle and only leaves once spoken to; no text box shows until then, and no game got past him.
+            self.pyboy.button_press("a")
+            self.pyboy.tick(PRESS_FRAMES, False)
+            self.pyboy.button_release("a")
+            self.pyboy.tick(ACTION_FRAMES - PRESS_FRAMES - 1, False)
+            self.pyboy.tick(1, True)
+        self._bumped = False
         for _ in range(TEXT_PRESSES if self.cfg.click_text else 0):
             if self._read(BATTLE_MODE) != 0 or not text_box(self.pyboy.screen.ndarray):
                 return
@@ -383,6 +397,7 @@ class SilverEnv(gym.Env):
         return self._advance(0, ACTION_FRAMES)
 
     def _advance(self, action: int, frames: int):
+        self._where_before_tick = self._where()
         self.pyboy.tick(frames - 1, False)
         self.pyboy.tick(1, True)
         self._click_through_text()
