@@ -595,3 +595,19 @@ def test_on_every_road_map_each_tile_has_a_step_that_gets_closer(m, goal):
     for p, d in dist.items():
         if d:
             assert any(dist.get(b, 10**6) < d for a, b in moves if a == p) or any(dist.get(a, 10**6) < d for a, b in moves if b == p)
+
+
+def test_the_compass_leads_to_the_gym_door_and_then_to_falkner():
+    door = [tuple(e[0]) for e in silver._MAPS[(10, 5)]["exits"] if tuple(e[2]) == silver._GYM][0]
+    far_away = silver.walking_far((10, 5), 36, 24, silver._GYM)
+    assert silver.walking_far((10, 5), *door, silver._GYM) == 0 < far_away
+    ram = _ram()
+    ram[silver.MAP_GROUP], ram[silver.MAP_NUMBER], ram[silver.X], ram[silver.Y] = 10, 7, 4, 15
+    s = SilverStats(ram.__getitem__, path=len(silver.PATH))  # in the gym: the road is done
+    start = s.shaping
+    for y in (13, 10, 6, 2):
+        ram[silver.Y] = y
+        s.observe()
+    ram[silver.X] = 5
+    s.observe()
+    assert s.shaping - start == pytest.approx(silver.COMPASS * 0.5 * 14 / 14) and s.base_value() < 0.1  # only new tiles

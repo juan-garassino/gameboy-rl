@@ -77,6 +77,7 @@ _TO_DOOR = {room: _walking_distances(room) for room in _WALKABLE}
 _MAPS = {tuple(map(int, k.split("."))): v for k, v in json.loads((Path(__file__).parent / "silver_maps.json").read_text()).items()}
 _ORDER = {**ROAD_ORDER, _LAB: -1}  # the lab lies off New Bark, one step past it on the way home
 _ROAD_MAPS = {(24, 4), (24, 3), (26, 3), (26, 1), (26, 2), (10, 5)}
+_GYM, _FALKNER = (10, 7), (5, 2)  # Violet Gym; the tile below Falkner (pret/pokegold: he stands at 5, 1)
 _OUTSIDE = {_LAB: ((24, 4), (6, 4)), _HOUSE: ((26, 1), (17, 6)), (24, 6): ((24, 4), (13, 6))}  # a room's door, seen from outside
 
 
@@ -279,6 +280,14 @@ class SilverStats:
 
     def _compass(self) -> None:
         m = (self.read(MAP_GROUP), self.read(MAP_NUMBER))
+        if self.path >= len(PATH):  # in the gym: on to Falkner, past his trainers (the badge pays the rest)
+            if m == _GYM and self.read(BATTLE_MODE) == 0:
+                x, y = self.read(X), self.read(Y)
+                near = -0.5 * min(1.0, (abs(x - _FALKNER[0]) + abs(y - _FALKNER[1])) / 14)
+                if self._near is not None and self._goal_step == self.path:
+                    self.shaping += COMPASS * (near - self._near)
+                self._near, self._goal_step = near, self.path
+            return
         here = ROAD_ORDER.get(m)
         goal_map = PATH[self.path][:2] if self.path < len(PATH) else None
         position = road_position(m, self.read(X), self.read(Y), home=goal_map == _LAB)
