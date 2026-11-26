@@ -166,7 +166,9 @@ AREAS: dict[tuple[int, int], str] = {
 }
 
 Read = Callable[[int], int]
-TEXT_PRESSES = 40  # A presses at most per step to click through a text box outside battle
+TEXT_PRESSES = 40  # presses at most per step to click through a text box outside battle
+TEXT_READ = 12  # of those, A first (reads the text); then B, which also backs out of a menu that A opened (a PC: after
+# a knockout, games woke up beside the bedroom PC and spent thousands of steps in its menus)
 
 
 def text_box(frame: np.ndarray) -> bool:
@@ -470,12 +472,13 @@ class SilverEnv(gym.Env):
             self.pyboy.tick(ACTION_FRAMES - PRESS_FRAMES - 1, False)
             self.pyboy.tick(1, True)
         self._bumped = False
-        for _ in range(TEXT_PRESSES if self.cfg.click_text else 0):
+        for i in range(TEXT_PRESSES if self.cfg.click_text else 0):
             if self._read(BATTLE_MODE) != 0 or not text_box(self.pyboy.screen.ndarray):
                 return
-            self.pyboy.button_press("a")
+            button = "a" if i < TEXT_READ else "b"
+            self.pyboy.button_press(button)
             self.pyboy.tick(PRESS_FRAMES, False)
-            self.pyboy.button_release("a")
+            self.pyboy.button_release(button)
             self.pyboy.tick(ACTION_FRAMES - PRESS_FRAMES - 1, False)
             self.pyboy.tick(1, True)
 
