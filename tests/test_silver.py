@@ -144,7 +144,8 @@ def test_the_compass_leads_out_of_the_house_and_to_the_door_itself():
     (4, (26, 1), (20, 54), {(x, 53) for x in range(20)}), (4, (26, 3), (40, 18), {(39, 7)}),
     (4, (24, 3), (60, 18), {(59, y) for y in range(18)}), (4, (24, 4), (20, 18), {(6, 3)}),
     (0, (24, 4), (20, 18), {(0, 8)}), (1, (24, 3), (60, 18), {(0, y) for y in range(18)}),
-    (2, (26, 3), (40, 18), {(17, 0)}), (3, (26, 1), (20, 54), {(17, 5)})])
+    (2, (26, 3), (40, 18), {(17, 0)}), (3, (26, 1), (20, 54), {(17, 5)}),
+    (5, (24, 5), (10, 12), {(4, 11)}), (4, (26, 10), (8, 8), {(2, 7)}), (5, (26, 1), (20, 54), {(x, 0) for x in range(20)})])
 def test_no_tile_but_the_way_on_is_where_the_compass_rests(path, m, size, best):
     ram = _ram()
     ram[silver.MAP_GROUP], ram[silver.MAP_NUMBER], ram[silver.X], ram[silver.Y] = *m, 0, 0

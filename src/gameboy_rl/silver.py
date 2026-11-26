@@ -43,6 +43,7 @@ ROAD_ORDER = {(24, 6): 0, (24, 7): 0, (24, 4): 0, (24, 5): 0, (24, 3): 1, (26, 3
 COMPASS = 3.0  # paid per map closer to the next goal (and in part per tile), taken back when moving away: loops cancel
 _LAB, _HOUSE = (24, 5), (26, 10)  # Elm's, Mr. Pokemon's
 _DOORS = {_LAB: 0.45, _HOUSE: 3.89}  # where those two doors stand along the road
+_EXITS = {_LAB: (4, 11), _HOUSE: (2, 7)}  # the tile inside each room by its door
 _DOOR_TILES = {_LAB: ((24, 4), 6, 3, 20), _HOUSE: ((26, 1), 17, 5, 66)}  # outside: (map, x, y, tiles that count as one map)
 
 
@@ -183,6 +184,9 @@ class SilverStats:
         self._here, self._away = here, abs(goal - here) + (not in_goal)
         target = _DOORS.get(goal_map, float(goal))
         rest = 0.0 if in_goal else 0.5
+        if m in _EXITS and not in_goal:  # in a room the goal is not in: out through its door (after the egg, games stayed by Elm)
+            ex, ey = _EXITS[m]
+            rest += 0.15 * (abs(self.read(X) - ex) + abs(self.read(Y) - ey)) / 12
         if in_goal and m == _LAB:  # up to Elm: the egg was handed over from (4, 2)
             rest = 0.5 * min(1.0, (abs(self.read(X) - 4) + abs(self.read(Y) - 2)) / 12)
         far = abs(target - position)
