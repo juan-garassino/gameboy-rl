@@ -543,3 +543,12 @@ def test_a_check_counts_games_per_story_step():
     s = summary([{**g, "path": 4}, {**g, "path": 5, "badges": 1}, {**g, "path": 2}])
     assert s["got to"]["Mr. Pokemon's house"] == 2 and s["got to"]["Elm's lab (egg)"] == 1 and s["got to"]["Route 31"] == 0
     assert s["badges"] == 1 and s["share of steps in the player's house"] == pytest.approx(0.1)
+
+
+def test_a_text_box_is_told_apart_from_the_map():
+    screen = np.full((144, 160, 4), 90, np.uint8)  # a map: mid tones
+    assert not silver.text_box(screen)
+    screen[104:136, 8:152] = 255  # a white box, no border yet
+    assert not silver.text_box(screen)
+    screen[98, 8:152] = 10
+    assert silver.text_box(screen)

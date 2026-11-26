@@ -38,6 +38,7 @@ class Settings(BaseSettings):
     resume_from: Path | None = None  # GBRL_RESUME_FROM=/workspace/init/poke_26214400.zip (when no run ckpt yet)
     eval_episodes: int = 3  # GBRL_EVAL_EPISODES=3 (silver: games per eval and per baseline; one game proves nothing)
     stall_steps: int = 1024  # GBRL_STALL_STEPS=1024 (silver: dry steps that end a game, × (1 + path steps reached))
+    click_text: bool = True  # GBRL_CLICK_TEXT=false (silver: outside battle, text boxes are clicked through by the env)
     frontier_prob: float = 0.5  # GBRL_FRONTIER_PROB=0.5 (silver: share of games starting at the furthest point reached)
     n_epochs: int = 1  # GBRL_N_EPOCHS=3 (silver: with 1 pass per batch it stayed near-random, entropy 1.65-1.75 of 1.79)
     ent_coef: float = 0.01  # GBRL_ENT_COEF=0.01 (0.02 kept Silver near-random; StallClock now handles being stuck)

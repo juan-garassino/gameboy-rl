@@ -103,6 +103,15 @@ AREAS: dict[tuple[int, int], str] = {
 }
 
 Read = Callable[[int], int]
+TEXT_PRESSES = 40  # A presses at most per step to click through a text box outside battle
+
+
+def text_box(frame: np.ndarray) -> bool:
+    """A message box is open: the bottom of the screen white under a dark border line. Calibrated on 1950 frames: never
+    while walking, only when the player could not move (outside battle)."""
+    white = (frame[104:136, 8:152, :3].min(axis=2) > 200).mean()
+    line = (frame[96:101, 8:152, :3].max(axis=2) < 80).mean(axis=1).max()
+    return bool(white > 0.7 and line > 0.8)
 
 
 def _bits(read: Read, start: int, end: int) -> int:
@@ -357,6 +366,18 @@ class SilverEnv(gym.Env):
         self.pyboy.button_release(button)
         return self._advance(int(action), ACTION_FRAMES - PRESS_FRAMES)
 
+    def _click_through_text(self) -> None:
+        """Outside battle a text box freezes the player until it is clicked through (the aide's scene after the egg
+        took about 30 presses and stopped every game): press A for it, so the network is not asked while it cannot act."""
+        for _ in range(TEXT_PRESSES if self.cfg.click_text else 0):
+            if self._read(BATTLE_MODE) != 0 or not text_box(self.pyboy.screen.ndarray):
+                return
+            self.pyboy.button_press("a")
+            self.pyboy.tick(PRESS_FRAMES, False)
+            self.pyboy.button_release("a")
+            self.pyboy.tick(ACTION_FRAMES - PRESS_FRAMES - 1, False)
+            self.pyboy.tick(1, True)
+
     def step_nothing(self):
         """Same clock as step(), no button: the do-nothing baseline."""
         return self._advance(0, ACTION_FRAMES)
@@ -364,6 +385,7 @@ class SilverEnv(gym.Env):
     def _advance(self, action: int, frames: int):
         self.pyboy.tick(frames - 1, False)
         self.pyboy.tick(1, True)
+        self._click_through_text()
         self.stats.observe()
         self.frontier.reached(self.pyboy, self.stats.path, self.stats.away)
         if self.cfg.frontier_prob > 0:  # training games only: evals are scored separately
