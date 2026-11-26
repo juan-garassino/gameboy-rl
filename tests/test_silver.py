@@ -30,7 +30,7 @@ def test_doing_nothing_is_worth_nothing():
 
 @pytest.mark.parametrize("change,expected", [
     ({silver.JOHTO_BADGES: 1}, 50.0), ({silver.CAUGHT_START: 1}, 1.0),
-    ({silver.PARTY + silver.LEVEL: 6}, 0.5), ({silver.X: 7}, 0.005), ({silver.MAP_NUMBER: 5}, 0.105)])
+    ({silver.PARTY + silver.LEVEL: 6}, 1.5), ({silver.X: 7}, 0.005), ({silver.MAP_NUMBER: 5}, 0.105)])
 def test_progress_is_rewarded(change, expected):
     ram = _ram()
     s = SilverStats(ram.__getitem__)
@@ -109,13 +109,33 @@ def test_road_pays_once_per_step_and_only_toward_the_goal():
     assert s.shaping > 0
 
 
-def test_levelling_up_pays_less_than_the_story():
+def test_fighting_pays_up_to_the_gym_and_no_further():
     ram = _ram()
     s = SilverStats(ram.__getitem__, path=4)
-    ram[silver.PARTY + silver.LEVEL] = 12  # level 5 to 12, about 1600 experience: Route 30's grass
-    ram[silver.PARTY + silver.EXP + 1] = 1600 // 256
+    ram[silver.PARTY + silver.LEVEL] = 30  # far past what Falkner needs
+    ram[silver.PARTY + silver.EXP + 1] = 40  # about 10,000 experience
     s.observe()
-    assert s.base_value() < (silver.PATH_REWARDS[4] + silver.STORY_PAY[31]) / 3
+    most = (silver.LEVEL_TARGET - 5) * silver.WEIGHTS["level"] + 10_240 * silver.WEIGHTS["exp"]
+    assert s.base_value() == pytest.approx(most)
+    assert most + silver.WINS_PAID * silver.WEIGHTS["won"] < silver.WEIGHTS["badge"] + silver.STORY_PAY[1213]
+
+
+def test_a_battle_won_pays_and_running_away_does_not():
+    ram = _ram()
+    s = SilverStats(ram.__getitem__)
+    for exp in (None, None):  # a battle, then out of it with nothing gained: ran away
+        ram[silver.BATTLE_MODE] = 1
+        s.observe()
+        ram[silver.BATTLE_MODE] = 0
+        s.observe()
+    assert s.won == 0
+    ram[silver.BATTLE_MODE] = 1
+    s.observe()
+    ram[silver.PARTY + silver.EXP + 2] = 60  # the enemy fainted
+    s.observe()
+    ram[silver.BATTLE_MODE] = 0
+    s.observe()
+    assert s.won == 1 and s.progress()["won"] == 1
 
 
 def test_the_compass_leads_out_of_the_house_and_to_the_door_itself():

@@ -29,7 +29,11 @@ FRAME_STACK = 3
 # Story flags that mean real progress (numbers: achievements.STORY), in points. Other flags pay nothing.
 STORY_PAY = {30: 5.0, 31: 15.0, **{i: 30.0 for i in range(1213, 1221)}}
 HEAL_PAY, HEAL_MAX = 0.5, 3.0  # per full party restored outside battle, at most this much per game
-WEIGHTS = {"badge": 50.0, "story": 1.0, "healed": 1.0, "map": 0.1, "caught": 1.0, "level": 0.5, "exp": 0.002, "tile": 0.005, "road_tile": 0.045, "retraced": 0.0}  # road_tile adds to tile; retraced is only counted
+# Fighting pays up to what the first gym needs, then nothing: unbounded, it was worth more than the story (6 of 6 games
+# with the egg went back to grind Route 30); with nothing, games ran from every battle.
+LEVEL_TARGET = 14  # Falkner's Pidgeotto is level 9; a lead at 14 should win
+WINS_PAID = 15  # battles won (the enemy fainted) that pay, per game
+WEIGHTS = {"badge": 50.0, "story": 1.0, "healed": 1.0, "map": 0.1, "caught": 1.0, "level": 1.5, "exp": 0.002, "won": 0.75, "tile": 0.005, "road_tile": 0.045, "retraced": 0.0}  # road_tile adds to tile; retraced is only counted
 
 # The story's road to the first badge, from pret/pokegold's map_constants.asm. Each step pays more than the last.
 PATH: list[tuple[int, int, str]] = [
@@ -127,6 +131,7 @@ class SilverStats:
         self.tiles: set[tuple[int, int, int, int]] = set()
         self.start_story = self._story()
         self.story = 0.0
+        self.won, self._battle_exp = 0, None  # battles won this game; experience when the current battle began
         self.healed = 0.0
         self._hp: tuple[float, int, int] | None = None  # (health, levels, party) when last seen outside battle
         self.maps: dict[tuple[int, int], None] = {}  # an ordered set: the order areas were reached in
@@ -168,7 +173,19 @@ class SilverStats:
             self.healed = min(HEAL_MAX, self.healed + HEAL_PAY * (now[0] - self._hp[0]))  # blackouts (from 0) and level-ups do not count
         self._hp = now
 
+    def _watch_battles(self) -> None:
+        """A battle is won when it ends and the party gained experience during it (only a fainted enemy gives any)."""
+        fighting = self.read(BATTLE_MODE) != 0
+        exp = self._raw()["exp"]
+        if fighting and self._battle_exp is None:
+            self._battle_exp = exp
+        elif not fighting and self._battle_exp is not None:
+            if exp > self._battle_exp:
+                self.won = min(WINS_PAID, self.won + 1)
+            self._battle_exp = None
+
     def observe(self) -> None:
+        self._watch_battles()
         for k, v in self._raw().items():
             self.best[k] = max(self.best[k], v)
         self._watch_story_and_health()
@@ -230,6 +247,8 @@ class SilverStats:
 
     def progress(self) -> dict[str, int]:
         gained = {k: self.best[k] - self.base[k] for k in self.base}
+        gained["level"] = max(0, min(self.best["level"], LEVEL_TARGET) - min(self.base["level"], LEVEL_TARGET))
+        gained["won"] = self.won
         return {**gained, "map": len(self.maps) - self.start_maps, "tile": len(self.tiles) - self.start_tiles,
                 "story": self.story, "healed": self.healed, "road_tile": self.road_tiles - self.start_road_tiles, "retraced": self.retraced, "path": self.path}
 
